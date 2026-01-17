@@ -1,5 +1,5 @@
 import Std
-import Http.Parser
+import Http.Http1_1.Parser
 
 
 -- #check Std.Net
@@ -47,7 +47,7 @@ open Std.Internal.Parsec Std.Internal.Parsec.String in
 
 section
 
-namespace Http
+namespace Http.Http1_1
 
 @[always_inline]
 local instance : Uri.Parser.MonadParser Parser where
@@ -89,9 +89,9 @@ Upgrade-Insecure-Requests: 1
 
 def t := do
   let resp ← f.wait
-  let resp := Http.Parser.Http1_1.http_message (m := Parser) |>.run resp
+  let resp := Http.Http1_1.Parser.http_message (m := Parser) |>.run resp
   println! "{repr resp}"
 
--- #eval Http.Parser.Http1_1.http_message (m := Parser) |>.run s
+-- #eval Http.Http1_1.Parser.http_message (m := Parser) |>.run s
 
 -- #eval t

@@ -1,7 +1,7 @@
 module
 
 public import Uri
-public import Http.Basic
+public import Http.Http1_1.Wire
 public import Http.Uri
 public import Http.Parser.Util
 public import Http.Parser.LanguageRange
@@ -10,7 +10,9 @@ public import Http.Parser.Mailbox
 
 public section
 
-namespace Http.Parser.Http1_1
+namespace Http.Http1_1.Parser
+
+open Http.Parser
 
 variable [Monad m] [∀ α, OrElse (m α)] [Uri.Parser.MonadParser m]
 
@@ -910,4 +912,4 @@ def chunked_body : m ChunkedBody := do
   CRLF
   return { chunks, trailer }
 
-end Http.Parser.Http1_1
+end Http.Http1_1.Parser
