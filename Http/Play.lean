@@ -1,12 +1,9 @@
+module
+
 import Std
-import Http.Http1_1.Parser
-
-
--- #check Std.Net
--- #check Std.Internal.IO.Async.TCP.Socket.Client
-#check Std.Internal.IO.Async.TCP.Socket.Client
-
-
+public import Http.Http1_1.Parser
+public import Http.Surface
+import all Http.Client
 
 open Std.Internal
 open IO.Async
@@ -40,31 +37,11 @@ Upgrade-Insecure-Requests: 1
     sock.shutdown
   return ""
 
--- #eval f.wait
--- #check Async.
-
 open Std.Internal.Parsec Std.Internal.Parsec.String in
 
 section
 
 namespace Http.Http1_1
-
-@[always_inline]
-local instance : Uri.Parser.MonadParser Parser where
-  satisfy := satisfy
-  pchar := pchar
-  pstring := pstring
-  skipChar := skipChar
-  skipString := skipString
-  attempt := attempt
-  optional := optional
-  many := many
-  many1 := many1
-  manyChars := manyChars
-  many1Chars := many1Chars
-  fail := fail
-  notFollowedBy := notFollowedBy
-  peek? := peek?
 
 deriving instance Repr for Std.Net.IPv4Addr
 deriving instance Repr for Std.Net.IPv6Addr
@@ -87,11 +64,28 @@ Upgrade-Insecure-Requests: 1
 
 "
 
-def t := do
+
+def t : IO Unit := do
   let resp ← f.wait
-  let resp := Http.Http1_1.Parser.http_message (m := Parser) |>.run resp
-  println! "{repr resp}"
-
--- #eval Http.Http1_1.Parser.http_message (m := Parser) |>.run s
-
+  println! "{resp}"
+--   let resp := Http.Http1_1.Parser.http_message (m := Parser) |>.run resp
+--   println! "{repr resp}"
 -- #eval t
+
+instance : Repr (ByteArray) where
+  reprPrec x _ := s!"{repr x.data}"
+
+deriving instance Repr for Response
+
+def r : IO Unit := do
+  let client := HttpClient.mk "127.0.0.1" 8000 .http2
+  let resp ← client.get "/"
+  match resp with
+  | Except.error e => println! "error: {e}"
+  | .ok r =>
+    -- println! "{repr r}"
+    let body := r.body?.map String.fromUTF8?
+    let body := body.join
+    println! "{body}"
+
+#eval r

@@ -6,7 +6,7 @@ public section
 
 namespace Http.Parser
 
-variable [Monad m] [∀ α, OrElse (m α)] [Uri.Parser.MonadParser m]
+variable {m} [instMonad : Monad m] [instOrElse : ∀ α, OrElse (m α)] [instParser : Uri.Parser.MonadParser m]
 
 open Uri.Parser.MonadParser
 

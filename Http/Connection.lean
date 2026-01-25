@@ -8,7 +8,7 @@ public section
 namespace Http.Connection
 
 inductive Protocol where
-  | http1
+  | http1_1
   | http2
   | unknown
 deriving Inhabited, Repr, BEq
@@ -82,7 +82,7 @@ def probe (bytes : ByteArray) : Probe :=
     | none => .needMore
     | some idx =>
         if hasSubarrayInRange bytes http1Marker idx then
-          .protocol .http1
+          .protocol .http1_1
         else
           .protocol .unknown
 

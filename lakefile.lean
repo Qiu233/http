@@ -7,5 +7,5 @@ package "http" where
 
 lean_lib «Http» where
 
-require binary from git "https://github.com/Lean-zh/binary.git" @ "2fb5c4b9b3d53bcd09461ef0f69ea455b3144b12"
-require uri from git "https://github.com/Qiu233/uri" @ "0cc931ef8729538e2ad8801f5a6660448bff51a4"
+require binary from git "https://github.com/Lean-zh/binary.git"
+require uri from git "https://github.com/Qiu233/uri"

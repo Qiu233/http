@@ -2,8 +2,10 @@ module
 
 public import Std
 public import Http.Http1_1.Builder
+public import Http.Http1_1.Parser
 public import Http.Http2.Wire
 public import Http.HPack.Encode
+public import Http.Basic
 
 public section
 
@@ -23,6 +25,24 @@ inductive RequestTarget where
   | asterisk
 deriving Inhabited
 
+@[always_inline]
+private def requestTargetToHttp1 : RequestTarget → Http.Http1_1.RequestTarget
+  | .origin path query? => .origin path query?
+  | .absolute uri => .absolute uri
+  | .authority auth => .authority auth
+  | .asterisk => .asterisk
+
+@[always_inline]
+private def requestTargetFromHttp1 : Http.Http1_1.RequestTarget → RequestTarget
+  | .origin path query? => .origin path query?
+  | .absolute uri => .absolute uri
+  | .authority auth => .authority auth
+  | .asterisk => .asterisk
+
+@[always_inline]
+def RequestTarget.parse? (target : String) : Except String RequestTarget :=
+  requestTargetFromHttp1 <$> (Http1_1.Parser.request_target (instParser := Http.instParser)).run target
+
 structure Request where
   method : String
   target : RequestTarget
@@ -36,13 +56,6 @@ structure Response where
   headers : Headers
   body? : Option ByteArray := none
 deriving Inhabited
-
-@[inline]
-def requestTargetToHttp1 : RequestTarget → Http.Http1_1.RequestTarget
-  | .origin path query? => .origin path query?
-  | .absolute uri => .absolute uri
-  | .authority auth => .authority auth
-  | .asterisk => .asterisk
 
 @[inline]
 def headerToFieldLine (h : Header) : Http.Http1_1.FieldLine :=
