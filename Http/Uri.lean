@@ -10,9 +10,9 @@ public section
 namespace Uri.Parser
 
 
-variable {m} [instMonad : Monad m] [instOrElse : ∀ α, OrElse (m α)] [instParser : Uri.Parser.MonadParser m]
+variable {m} [instMonad : Monad m] [instOrElse : ∀ α, OrElse (m α)] [instParser : PolyParsec.MonadPolyParsec String m]
 
-open Uri.Parser.MonadParser
+open PolyParsec
 
 @[always_inline, specialize]
 def uri_host : m Host := host

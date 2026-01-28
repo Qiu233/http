@@ -3,7 +3,6 @@ open Lake DSL
 
 package "http" where
   version := v!"0.1.0"
-  leanOptions := #[⟨`experimental.module, true⟩]
 
 lean_lib «Http» where
 

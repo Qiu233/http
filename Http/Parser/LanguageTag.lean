@@ -8,9 +8,9 @@ public section
 
 namespace Http.Parser
 
-variable {m} [instMonad : Monad m] [instOrElse : ∀ α, OrElse (m α)] [instParser : Uri.Parser.MonadParser m]
+variable {m} [instMonad : Monad m] [instOrElse : ∀ α, OrElse (m α)] [instParser : PolyParsec.MonadPolyParsec String m]
 
-open Uri.Parser.MonadParser
+open PolyParsec
 
 @[inline, specialize]
 def language_tag_extlang : m String := do

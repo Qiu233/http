@@ -1,14 +1,15 @@
 module
 
 public import Uri
+public import PolyParsec
 
 public section
 
 namespace Http.Parser
 
-variable {m} [instMonad : Monad m] [instOrElse : ∀ α, OrElse (m α)] [instParser : Uri.Parser.MonadParser m]
+variable {m} [instMonad : Monad m] [instOrElse : ∀ α, OrElse (m α)] [instParser : PolyParsec.MonadPolyParsec String m]
 
-open Uri.Parser.MonadParser
+open PolyParsec
 
 @[always_inline, specialize]
 def CR : m Char := pchar '\r'

@@ -14,9 +14,9 @@ namespace Http.Http1_1.Parser
 
 open Http.Parser
 
-variable {m} [instMonad : Monad m] [instOrElse : ∀ α, OrElse (m α)] [instParser : Uri.Parser.MonadParser m]
+variable {m} [instMonad : Monad m] [instOrElse : ∀ α, OrElse (m α)] [instParser : PolyParsec.MonadPolyParsec String m]
 
-open Uri.Parser.MonadParser
+open PolyParsec
 open Uri.Parser
 
 @[always_inline, specialize]

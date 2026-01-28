@@ -118,6 +118,7 @@ def resolveAddress (host : String) (port : UInt16) : Async (Except String Socket
           | some (IPAddr.v6 ip) => return .ok (SocketAddress.v6 (SocketAddressV6.mk ip port))
           | none => return .error s!"no DNS addresses for {host}"
 
+open PolyParsec.Std in
 def sendHttp1 (client : HttpClient) (req : Request) : Async (Except String Response) := do
   let addrResult ← resolveAddress client.host client.port
   let addr ←
@@ -136,7 +137,7 @@ def sendHttp1 (client : HttpClient) (req : Request) : Async (Except String Respo
           let some data ← conn.recv? 4096 | break
           resp := resp.append data
         let some respStr := String.fromUTF8? resp | return .error "invalid HTTP/1.1 response bytes"
-        let parsed := (Http.Http1_1.Parser.http_message (instParser := Http.instParser)).run respStr
+        let parsed := (Http.Http1_1.Parser.http_message (m := Std.Internal.Parsec.String.Parser)).run respStr
         match parsed with
         | .ok msg => return responseFromHttp1 msg
         | .error err => return .error s!"failed to parse HTTP/1.1 response: {err}\n{respStr}"

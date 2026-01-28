@@ -39,9 +39,10 @@ private def requestTargetFromHttp1 : Http.Http1_1.RequestTarget → RequestTarge
   | .authority auth => .authority auth
   | .asterisk => .asterisk
 
+open PolyParsec.Std in
 @[always_inline]
 def RequestTarget.parse? (target : String) : Except String RequestTarget :=
-  requestTargetFromHttp1 <$> (Http1_1.Parser.request_target (instParser := Http.instParser)).run target
+  requestTargetFromHttp1 <$> (Http1_1.Parser.request_target (m := Std.Internal.Parsec.String.Parser)).run target
 
 structure Request where
   method : String
