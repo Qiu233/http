@@ -78,7 +78,7 @@ instance : Repr (ByteArray) where
 deriving instance Repr for Response
 
 def r : IO Unit := do
-  let client := HttpClient.mk "127.0.0.1" 8000 .http2
+  let client := HttpClient.mkTCP "127.0.0.1" 8000 .http1_1
   let resp ← client.get "/"
   match resp with
   | Except.error e => println! "error: {e}"

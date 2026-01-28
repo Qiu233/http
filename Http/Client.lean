@@ -15,18 +15,46 @@ open IO.Async
 open TCP
 open Std.Net
 
+public structure Transport.Connection where
+  send : ByteArray → Async Unit
+  recv? : UInt64 → Async (Option ByteArray)
+  shutdown : Async Unit
+
+public structure Transport where
+  connect : SocketAddress → Async (Except String Transport.Connection)
+
+public def Transport.tcp : Transport :=
+  { connect := fun addr => do
+      let sock ← Socket.Client.mk
+      try
+        sock.connect addr
+        let conn : Transport.Connection :=
+          { send := fun bytes => sock.send bytes
+            recv? := fun n => sock.recv? n
+            shutdown := sock.shutdown }
+        return .ok conn
+      catch e =>
+        return .error e.toString }
+
+instance : Inhabited Transport where
+  default := Transport.tcp
+
+instance : Repr Transport where
+  reprPrec _ _ := "<transport>"
+
 public structure HttpClient where
   public mk' ::
   host : String
   port : UInt16 := 80
   protocol : Http.Connection.Protocol := .http1_1
   defaultHeaders : Headers := #[]
-deriving Inhabited, Repr
+  transport : Transport := Transport.tcp
+deriving Repr
 
 @[always_inline]
-public def HttpClient.mk (host : String) (port : UInt16 := 80)
+public def HttpClient.mkTCP (host : String) (port : UInt16 := 80)
     (protocol : Http.Connection.Protocol := .http1_1) : HttpClient :=
-  { host, port, protocol }
+  { host, port, protocol, transport := Transport.tcp }
 
 @[always_inline]
 def header (name value : String) : Header :=
@@ -91,29 +119,31 @@ def resolveAddress (host : String) (port : UInt16) : Async (Except String Socket
           | none => return .error s!"no DNS addresses for {host}"
 
 def sendHttp1 (client : HttpClient) (req : Request) : Async (Except String Response) := do
-  let sock ← Socket.Client.mk
-  try
-    let addrResult ← resolveAddress client.host client.port
-    let addr ←
-      match addrResult with
-      | .ok addr => pure addr
-      | .error err => return .error err
-    sock.connect addr
-    let req := prepareRequest client req
-    sock.send (requestToHttp1String req).toUTF8
-    let mut resp := ByteArray.empty
-    repeat
-      let some data ← sock.recv? 4096 | break
-      resp := resp.append data
-    let some respStr := String.fromUTF8? resp | return .error "invalid HTTP/1.1 response bytes"
-    let parsed := (Http.Http1_1.Parser.http_message (instParser := Http.instParser)).run respStr
-    match parsed with
-    | .ok msg => return responseFromHttp1 msg
-    | .error err => return .error s!"failed to parse HTTP/1.1 response: {err}\n{respStr}"
-  catch e =>
-    return .error e.toString
-  finally
-    sock.shutdown
+  let addrResult ← resolveAddress client.host client.port
+  let addr ←
+    match addrResult with
+    | .ok addr => pure addr
+    | .error err => return .error err
+  let connResult ← client.transport.connect addr
+  match connResult with
+  | .error err => return .error err
+  | .ok conn =>
+      try
+        let req := prepareRequest client req
+        conn.send (requestToHttp1String req).toUTF8
+        let mut resp := ByteArray.empty
+        repeat
+          let some data ← conn.recv? 4096 | break
+          resp := resp.append data
+        let some respStr := String.fromUTF8? resp | return .error "invalid HTTP/1.1 response bytes"
+        let parsed := (Http.Http1_1.Parser.http_message (instParser := Http.instParser)).run respStr
+        match parsed with
+        | .ok msg => return responseFromHttp1 msg
+        | .error err => return .error s!"failed to parse HTTP/1.1 response: {err}\n{respStr}"
+      catch e =>
+        return .error e.toString
+      finally
+        conn.shutdown
 
 def prepareRequestH2 (client : HttpClient) (req : Request) : Request :=
   let headers := applyDefaultHeaders req.headers client.defaultHeaders
@@ -136,11 +166,11 @@ def frameLength (header : ByteArray) : Option Nat := do
   let b2 ← header[2]?
   return (b0.toNat <<< 16) + (b1.toNat <<< 8) + b2.toNat
 
-def recvExact (sock : Socket.Client) (n : Nat) : Async (Except String ByteArray) := do
+def recvExact (conn : Transport.Connection) (n : Nat) : Async (Except String ByteArray) := do
   let mut out := ByteArray.empty
   let mut remaining := n
   while remaining > 0 do
-    let chunk? ← sock.recv? remaining.toUInt64
+    let chunk? ← conn.recv? remaining.toUInt64
     match chunk? with
     | none => return .error "unexpected EOF"
     | some chunk =>
@@ -148,13 +178,13 @@ def recvExact (sock : Socket.Client) (n : Nat) : Async (Except String ByteArray)
         remaining := n - out.size
   return .ok out
 
-def recvFrame (sock : Socket.Client) : Async (Except String Http.Http2.Frame) := do
-  let headerRes ← recvExact sock 9
+def recvFrame (conn : Transport.Connection) : Async (Except String Http.Http2.Frame) := do
+  let headerRes ← recvExact conn 9
   match headerRes with
   | .error err => return .error err
   | .ok header =>
       let some len := frameLength header | return .error "failed to decode frame length"
-      let payloadRes ← recvExact sock len
+      let payloadRes ← recvExact conn len
       match payloadRes with
       | .error err => return .error err
       | .ok payload =>
@@ -184,7 +214,7 @@ def headersFromHpack (headers : List Http.HPack.HeaderField) : Except String Hea
       let some value := String.fromUTF8? h.value | throw "invalid header value"
       pure <| acc.push { name, value }
 
-def readHttp2Response (sock : Socket.Client) (streamId : Http.Http2.StreamId) :
+def readHttp2Response (conn : Transport.Connection) (streamId : Http.Http2.StreamId) :
     Async (Except String Response) := do
   let mut headerBlock := ByteArray.empty
   let mut headers? : Option Headers := none
@@ -193,7 +223,7 @@ def readHttp2Response (sock : Socket.Client) (streamId : Http.Http2.StreamId) :
   let mut body := ByteArray.empty
   let mut done := false
   while !done do
-    let frameRes ← recvFrame sock
+    let frameRes ← recvFrame conn
     let frame ←
       match frameRes with
       | .ok f => pure f
@@ -204,7 +234,7 @@ def readHttp2Response (sock : Socket.Client) (streamId : Http.Http2.StreamId) :
           let ackFrame : Http.Http2.Frame :=
             { header := { length := 0, typ := .settings, flags := 0, streamId := 0 }
               payload := .settings { ack := true, settings := #[] } }
-          sock.send (Http.Http2.Builder.frameBytes ackFrame)
+          conn.send (Http.Http2.Builder.frameBytes ackFrame)
         pure ()
     | _ => pure ()
     if frame.header.streamId != streamId then
@@ -252,31 +282,33 @@ def readHttp2Response (sock : Socket.Client) (streamId : Http.Http2.StreamId) :
       return .error "missing response headers"
 
 def sendHttp2 (client : HttpClient) (req : Request) : Async (Except String Response) := do
-  let sock ← Socket.Client.mk
-  try
-    let addrResult ← resolveAddress client.host client.port
-    let addr ←
-      match addrResult with
-      | .ok addr => pure addr
-      | .error err => return .error err
-    sock.connect addr
-    sock.send Http.Http2.connectionPreface
-    let settingsFrame : Http.Http2.Frame :=
-      { header := { length := 0, typ := .settings, flags := 0, streamId := 0 }
-        payload := .settings { ack := false, settings := #[] } }
-    sock.send (Http.Http2.Builder.frameBytes settingsFrame)
-    let req := prepareRequestH2 client req
-    let ctx : RequestH2Context :=
-      { streamId := 1
-        scheme? := some "http"
-        authority? := some (hostHeaderValue client.host client.port) }
-    for frame in requestToHttp2Frames req ctx do
-      sock.send (Http.Http2.Builder.frameBytes frame)
-    readHttp2Response sock 1
-  catch e =>
-    return .error e.toString
-  finally
-    sock.shutdown
+  let addrResult ← resolveAddress client.host client.port
+  let addr ←
+    match addrResult with
+    | .ok addr => pure addr
+    | .error err => return .error err
+  let connResult ← client.transport.connect addr
+  match connResult with
+  | .error err => return .error err
+  | .ok conn =>
+      try
+        conn.send Http.Http2.connectionPreface
+        let settingsFrame : Http.Http2.Frame :=
+          { header := { length := 0, typ := .settings, flags := 0, streamId := 0 }
+            payload := .settings { ack := false, settings := #[] } }
+        conn.send (Http.Http2.Builder.frameBytes settingsFrame)
+        let req := prepareRequestH2 client req
+        let ctx : RequestH2Context :=
+          { streamId := 1
+            scheme? := some "http"
+            authority? := some (hostHeaderValue client.host client.port) }
+        for frame in requestToHttp2Frames req ctx do
+          conn.send (Http.Http2.Builder.frameBytes frame)
+        readHttp2Response conn 1
+      catch e =>
+        return .error e.toString
+      finally
+        conn.shutdown
 
 public def HttpClient.sendAsync (client : HttpClient) (req : Request) :
     Async (Except String Response) :=
