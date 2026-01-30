@@ -2,6 +2,7 @@ module
 
 public import Http.Surface
 public import Http.Connection
+public import Binary -- TODO: why? Without this will causes downstream importers `invalid environment extension, 'Binary.Deriving.binEnumAttr' has already been used`
 import Http.Http1_1.Builder
 import Http.Http1_1.Parser
 import Http.Http2.Builder
