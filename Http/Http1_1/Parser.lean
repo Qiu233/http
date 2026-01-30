@@ -1,6 +1,6 @@
 module
 
-public import Uri
+public import Binary
 public import Http.Http1_1.Wire
 public import Http.Uri
 public import Http.Parser.Util
@@ -12,22 +12,19 @@ public section
 
 namespace Http.Http1_1.Parser
 
+open Binary UTF8
 open Http.Parser
-
-variable {m} [instMonad : Monad m] [instOrElse : ∀ α, OrElse (m α)] [instParser : PolyParsec.MonadPolyParsec String m]
-
-open PolyParsec
 open Uri.Parser
 
-@[always_inline, specialize]
-def http_name : m String := pstring "HTTP"
+@[always_inline]
+def http_name : Get String := pstring "HTTP"
 
 private def decode_dec! : Char → Nat := fun c =>
   if c.isDigit then c.toNat - '0'.toNat
   else panic! "invalid decimal character"
 
-@[always_inline, specialize]
-def http_version : m Version := do
+@[always_inline]
+def http_version : Get Version := do
   _ ← http_name
   skipChar '/'
   let x ← decode_dec! <$> satisfy Char.isDigit
@@ -35,54 +32,54 @@ def http_version : m Version := do
   let y ← decode_dec! <$> satisfy Char.isDigit
   return { major := x, minor := y }
 
-@[inline, specialize]
-def tchar : m Char := do
+@[inline]
+def tchar : Get Char := do
   satisfy fun c => c.isDigit || c.isAlpha ||
     c matches '!' | '#' | '$' | '%' | '&' | '\'' | '*' |
       '+' | '-' | '.' | '^' | '_' | '`' | '|' | '~'
 
-@[always_inline, specialize]
-def token : m String := many1Chars tchar
+@[always_inline]
+def token : Get String := many1Chars tchar
 
-@[always_inline, specialize]
-def method : m String := token
+@[always_inline]
+def method : Get String := token
 
-@[always_inline, specialize]
-def origin_form : m (String × Option String) := do
+@[always_inline]
+def origin_form : Get (String × Option String) := do
   let path ← Uri.Parser.absolute_path
   let query? ← optional do
     skipChar '?'
     query
   return (path, query?)
 
-@[always_inline, specialize]
-def absolute_form : m Uri := absolute_uri
+@[always_inline]
+def absolute_form : Get Uri := absolute_uri
 
-@[always_inline, specialize]
-def authority_form : m Uri.Authority := do
+@[always_inline]
+def authority_form : Get Uri.Authority := do
   let host ← host
   skipChar ':'
   let port ← Uri.Parser.port
   return { userInfo? := none, host, port? := some port }
 
-@[always_inline, specialize]
-def asterisk_form : m Char := pchar '*'
+@[always_inline]
+def asterisk_form : Get Char := pchar '*'
 
-@[always_inline, specialize]
-def SP' : m Unit := skipChar ' '
+@[always_inline]
+def SP' : Get Unit := skipChar ' '
 
-@[always_inline, specialize]
-def HTAB' : m Unit := skipChar '\t'
+@[always_inline]
+def HTAB' : Get Unit := skipChar '\t'
 
-@[inline, specialize]
-def request_target : m RequestTarget :=
-  attempt (origin_form >>= fun (path, query?) => return RequestTarget.origin path query?)
-  <|> attempt (absolute_form <&> RequestTarget.absolute)
-  <|> attempt (authority_form <&> RequestTarget.authority)
+@[inline]
+def request_target : Get RequestTarget :=
+  (origin_form >>= fun (path, query?) => return RequestTarget.origin path query?)
+  <|> (absolute_form <&> RequestTarget.absolute)
+  <|> (authority_form <&> RequestTarget.authority)
   <|> (asterisk_form *> pure RequestTarget.asterisk)
 
-@[inline, specialize]
-def request_line : m RequestLine := do
+@[inline]
+def request_line : Get RequestLine := do
   let method ← method
   SP'
   let request_target ← request_target
@@ -90,19 +87,19 @@ def request_line : m RequestLine := do
   let version ← http_version
   return { method, request_target, version }
 
-@[inline, specialize]
-def status_code : m Nat := do
+@[inline]
+def status_code : Get Nat := do
   let a ← decode_dec! <$> satisfy Char.isDigit
   let b ← decode_dec! <$> satisfy Char.isDigit
   let c ← decode_dec! <$> satisfy Char.isDigit
   return a * 100 + b * 10 + c
 
-@[always_inline, specialize]
-def reason_phrase : m String :=
+@[always_inline]
+def reason_phrase : Get String :=
   many1Chars <| HTAB <|> SP <|> vchar <|> obs_text
 
-@[inline, specialize]
-def status_line : m StatusLine := do
+@[inline]
+def status_line : Get StatusLine := do
   let version ← http_version
   SP'
   let status_code ← status_code
@@ -110,37 +107,37 @@ def status_line : m StatusLine := do
   let reason? ← optional reason_phrase
   return { version, status_code, reason? }
 
-@[always_inline, specialize]
-def OWS : m String := manyChars <| SP <|> HTAB
+@[always_inline]
+def OWS : Get String := manyChars <| SP <|> HTAB
 
-@[always_inline, specialize]
-def RWS : m String := many1Chars <| SP <|> HTAB
+@[always_inline]
+def RWS : Get String := many1Chars <| SP <|> HTAB
 
-@[always_inline, specialize]
-def BWS : m String := OWS
+@[always_inline]
+def BWS : Get String := OWS
 
-@[always_inline, specialize]
-def field_name : m String := token
+@[always_inline]
+def field_name : Get String := token
 
-@[always_inline, specialize]
-def field_vchar : m Char := vchar <|> obs_text
+@[always_inline]
+def field_vchar : Get Char := vchar <|> obs_text
 
-@[inline, specialize]
-partial def field_content : m String := do
+@[inline]
+partial def field_content : Get String := do
   let first ← field_vchar
   let tail ← optional do
-    let xs ← many1Chars <| SP <|> HTAB <|> field_vchar
+    let xs ← many1Chars <| SP <|> HTAB <|> field_vchar -- TODO: field-content is not LL, find a solution.
     let last := String.back xs
     if last matches ' ' | '\t' then
       fail "field-content must end with field-vchar"
     return xs
   return tail.map (fun t => first.toString ++ t) |>.getD first.toString
 
-@[always_inline, specialize]
-def field_value : m (Array String) := many field_content
+@[always_inline]
+def field_value : Get (Array String) := many field_content
 
-@[inline, specialize]
-def field_line : m FieldLine := do
+@[inline]
+def field_line : Get FieldLine := do
   let name ← field_name
   skipChar ':'
   _ ← OWS
@@ -148,8 +145,8 @@ def field_line : m FieldLine := do
   _ ← OWS
   return { name, value }
 
-@[inline, specialize]
-private def decimal_nat : m Nat := do
+@[inline]
+private def decimal_nat : Get Nat := do
   let s ← many1Chars DIGIT
   let xs := s.toList.map fun c => c.toNat - '0'.toNat
   let x :: xs := xs | unreachable!
@@ -161,130 +158,130 @@ private def decode_hex! : Char → Nat := fun c =>
   else if 'a' ≤ c && c ≤ 'f' then c.toNat - 'a'.toNat + 10
   else panic! "invalid hex character"
 
-@[inline, specialize]
-private def hex_nat : m Nat := do
+@[inline]
+private def hex_nat : Get Nat := do
   let s ← many1Chars HEXDIG
   let xs := s.toList.map decode_hex!
   let x :: xs := xs | unreachable!
   return xs.foldl (init := x) fun acc t => acc * 16 + t
 
 @[inline, specialize]
-private def comma_list (p : m α) : m (Array α) := do
-  let first? ← optional (attempt p)
+private def comma_list (p : Get α) : Get (Array α) := do
+  let first? ← optional (p)
   match first? with
   | none => return #[]
   | some first =>
     let mut xs := #[first]
     repeat
-      if let some x ← optional (attempt (OWS *> skipChar ',' *> OWS *> p)) then
+      if let some x ← optional ((OWS *> skipChar ',' *> OWS *> p)) then
         xs := xs.push x
       else break
     return xs
 
 @[inline, specialize]
-private def sp_list (p : m α) : m (Array α) := do
-  let first? ← optional (attempt p)
+private def sp_list (p : Get α) : Get (Array α) := do
+  let first? ← optional (p)
   match first? with
   | none => return #[]
   | some first =>
     let mut xs := #[first]
     repeat
-      if let some x ← optional (attempt (RWS *> p)) then
+      if let some x ← optional ((RWS *> p)) then
         xs := xs.push x
       else break
     return xs
 
-@[always_inline, specialize]
-def obs_fold : m String := do
+@[always_inline]
+def obs_fold : Get String := do
   let pre ← OWS
   CRLF
   let post ← RWS
   return pre ++ "\r\n" ++ post
 
-@[always_inline, specialize]
-def token68 : m String := do
+@[always_inline]
+def token68 : Get String := do
   let head ← many1Chars <| satisfy fun c =>
     c.isAlpha || c.isDigit || c matches '-' | '.' | '_' | '~' | '+' | '/'
   let pad ← manyChars (pchar '=')
   return head ++ pad
 
-@[always_inline, specialize]
-def qdtext : m Char := satisfy fun c =>
+@[always_inline]
+def qdtext : Get Char := satisfy fun c =>
   c == '\t' || c == '!' || c == ' ' ||
     ('\x23' ≤ c && c ≤ '\x5B') ||
     ('\x5D' ≤ c && c ≤ '\x7E') ||
     ('\x80' ≤ c && c ≤ '\xFF')
 
-@[always_inline, specialize]
-def quoted_pair : m String := do
+@[always_inline]
+def quoted_pair : Get String := do
   skipChar '\\'
   let c ← HTAB <|> SP <|> vchar <|> obs_text
   return "\\" ++ c.toString
 
-@[always_inline, specialize]
-def quoted_string : m String := do
+@[always_inline]
+def quoted_string : Get String := do
   _ ← DQUOTE
   let parts ← many <| (char_to_string <$> qdtext) <|> quoted_pair
   _ ← DQUOTE
   return String.intercalate "" parts.toList
 
-@[always_inline, specialize]
-def ctext : m Char := satisfy fun c =>
+@[always_inline]
+def ctext : Get Char := satisfy fun c =>
   c == '\t' || c == ' ' ||
     ('\x21' ≤ c && c ≤ '\x27') ||
     ('\x2A' ≤ c && c ≤ '\x5B') ||
     ('\x5D' ≤ c && c ≤ '\x7E') ||
     ('\x80' ≤ c && c ≤ '\xFF')
 
-partial def comment : m String := do
+partial def comment : Get String := do
   skipChar '('
-  let parts ← many <| attempt comment <|> quoted_pair <|> (char_to_string <$> ctext)
+  let parts ← many <| comment <|> quoted_pair <|> (char_to_string <$> ctext)
   skipChar ')'
   return "(" ++ String.intercalate "" parts.toList ++ ")"
 
-@[always_inline, specialize]
-def parameter_name : m String := token
+@[always_inline]
+def parameter_name : Get String := token
 
-@[always_inline, specialize]
-def parameter_value : m String := token <|> quoted_string
+@[always_inline]
+def parameter_value : Get String := token <|> quoted_string
 
-@[always_inline, specialize]
-def parameter : m Parameter := do
+@[always_inline]
+def parameter : Get Parameter := do
   let name ← parameter_name
   skipChar '='
   let value ← parameter_value
   return (name, value)
 
-@[inline, specialize]
-def parameters : m Parameters := do
+@[inline]
+def parameters : Get Parameters := do
   let mut xs := #[]
   repeat
-    if let some v ← optional (attempt (OWS *> skipChar ';' *> OWS *> optional parameter)) then
+    if let some v ← optional ((OWS *> skipChar ';' *> OWS *> optional parameter)) then
       xs := xs.push v
     else break
   return xs
 
-@[always_inline, specialize]
-def type : m String := token
+@[always_inline]
+def type : Get String := token
 
-@[always_inline, specialize]
-def subtype : m String := token
+@[always_inline]
+def subtype : Get String := token
 
-@[inline, specialize]
-def media_type : m MediaType := do
+@[inline]
+def media_type : Get MediaType := do
   let t ← type
   skipChar '/'
   let s ← subtype
   let params ← parameters
   return (t, s, params)
 
-@[inline, specialize]
-def media_range : m MediaRange := do
-  (attempt do
+@[inline]
+def media_range : Get MediaRange := do
+  (do
       skipString "*/*"
       let params ← parameters
       return ("*", "*", params))
-    <|> (attempt do
+    <|> (do
       let t ← type
       skipString "/*"
       let params ← parameters
@@ -296,9 +293,12 @@ def media_range : m MediaRange := do
       let params ← parameters
       return (t, s, params))
 
-@[always_inline, specialize]
-def qvalue : m String := do
-  (attempt do
+@[always_inline]
+private def chars_to_string : Array Char → String := fun x => String.ofList x.toList
+
+@[inline]
+def qvalue : Get String := do
+  (do
       skipChar '0'
       let frac ← optional do
         skipChar '.'
@@ -313,69 +313,69 @@ def qvalue : m String := do
         return "." ++ chars_to_string ds
       return "1" ++ frac.getD "")
 
-@[always_inline, specialize]
-def weight : m String := do
+@[always_inline]
+def weight : Get String := do
   _ ← OWS
   skipChar ';'
   _ ← OWS
   skipString "q="
   qvalue
 
-@[always_inline, specialize]
-def method_list : m (Array String) := comma_list method
+@[always_inline]
+def method_list : Get (Array String) := comma_list method
 
-@[inline, specialize]
-def accept : m (Array (MediaRange × Option String)) := do
-  let item : m (MediaRange × Option String) := do
+@[inline]
+def accept : Get (Array (MediaRange × Option String)) := do
+  let item : Get (MediaRange × Option String) := do
     let mr ← media_range
     let wt? ← optional weight
     return (mr, wt?)
   comma_list item
 
-@[inline, specialize]
-def accept_charset : m (Array (String × Option String)) := do
-  let item : m (String × Option String) := do
+@[inline]
+def accept_charset : Get (Array (String × Option String)) := do
+  let item : Get (String × Option String) := do
     let cs ← token <|> pstring "*"
     let wt? ← optional weight
     return (cs, wt?)
   comma_list item
 
-@[always_inline, specialize]
-def content_coding : m String := token
+@[always_inline]
+def content_coding : Get String := token
 
-@[inline, specialize]
-def codings : m String := content_coding <|> pstring "identity" <|> pstring "*"
+@[inline]
+def codings : Get String := content_coding <|> pstring "identity" <|> pstring "*"
 
-@[inline, specialize]
-def accept_encoding : m (Array (String × Option String)) := do
-  let item : m (String × Option String) := do
+@[inline]
+def accept_encoding : Get (Array (String × Option String)) := do
+  let item : Get (String × Option String) := do
     let c ← codings
     let wt? ← optional weight
     return (c, wt?)
   comma_list item
 
-@[inline, specialize]
-def accept_language : m (Array (String × Option String)) := do
-  let item : m (String × Option String) := do
+@[inline]
+def accept_language : Get (Array (String × Option String)) := do
+  let item : Get (String × Option String) := do
     let lr ← language_range
     let wt? ← optional weight
     return (lr, wt?)
   comma_list item
 
-@[always_inline, specialize]
-def range_unit : m String := token
+@[always_inline]
+def range_unit : Get String := token
 
-@[inline, specialize]
-def acceptable_ranges : m (Array String) := comma_list range_unit
+@[inline]
+def acceptable_ranges : Get (Array String) := comma_list range_unit
 
-@[always_inline, specialize]
-def allow : m (Array String) := comma_list method
+@[always_inline]
+def allow : Get (Array String) := comma_list method
 
-@[always_inline, specialize]
-def auth_scheme : m String := token
+@[always_inline]
+def auth_scheme : Get String := token
 
-@[always_inline, specialize]
-def auth_param : m Parameter := do
+@[always_inline]
+def auth_param : Get Parameter := do
   let name ← token
   _ ← BWS
   skipChar '='
@@ -383,120 +383,120 @@ def auth_param : m Parameter := do
   let value ← token <|> quoted_string
   return (name, value)
 
-@[inline, specialize]
-def auth_param_list : m (Array Parameter) := comma_list auth_param
+@[inline]
+def auth_param_list : Get (Array Parameter) := comma_list auth_param
 
-@[inline, specialize]
-def challenge : m (String × Option (Sum String (Array Parameter))) := do
+@[inline]
+def challenge : Get (String × Option (Sum String (Array Parameter))) := do
   let scheme ← auth_scheme
   let data? ← optional do
     _ ← many1Chars SP
-    (attempt (Sum.inl <$> token68)) <|> (Sum.inr <$> auth_param_list)
+    ((Sum.inl <$> token68)) <|> (Sum.inr <$> auth_param_list)
   return (scheme, data?)
 
-@[inline, specialize]
-def credentials : m (String × Option (Sum String (Array Parameter))) := do
+@[inline]
+def credentials : Get (String × Option (Sum String (Array Parameter))) := do
   let scheme ← auth_scheme
   let data? ← optional do
     _ ← many1Chars SP
-    (attempt (Sum.inl <$> token68)) <|> (Sum.inr <$> auth_param_list)
+    ((Sum.inl <$> token68)) <|> (Sum.inr <$> auth_param_list)
   return (scheme, data?)
 
-@[inline, specialize]
-def authentication_info : m (Array Parameter) := auth_param_list
+@[inline]
+def authentication_info : Get (Array Parameter) := auth_param_list
 
-@[always_inline, specialize]
-def authorization : m (String × Option (Sum String (Array Parameter))) := credentials
+@[always_inline]
+def authorization : Get (String × Option (Sum String (Array Parameter))) := credentials
 
-@[always_inline, specialize]
-def connection_option : m String := token
+@[always_inline]
+def connection_option : Get String := token
 
-@[always_inline, specialize]
-def connection : m (Array String) := comma_list connection_option
+@[always_inline]
+def connection : Get (Array String) := comma_list connection_option
 
-@[always_inline, specialize]
-def content_encoding : m (Array String) := comma_list content_coding
+@[always_inline]
+def content_encoding : Get (Array String) := comma_list content_coding
 
-@[always_inline, specialize]
-def content_language : m (Array String) := comma_list language_tag
+@[always_inline]
+def content_language : Get (Array String) := comma_list language_tag
 
-@[always_inline, specialize]
-def content_length : m Nat := decimal_nat
+@[always_inline]
+def content_length : Get Nat := decimal_nat
 
-@[always_inline, specialize]
-def absolute_URI : m Uri := absolute_uri
+@[always_inline]
+def absolute_URI : Get Uri := absolute_uri
 
-@[always_inline, specialize]
-def partial_URI : m Uri := Uri.Parser.partial_uri
+@[always_inline]
+def partial_URI : Get Uri := Uri.Parser.partial_uri
 
-@[always_inline, specialize]
-def content_location : m Uri := absolute_URI <|> partial_URI
+@[always_inline]
+def content_location : Get Uri := absolute_URI <|> partial_URI
 
-@[always_inline, specialize]
-def complete_length : m String := many1Chars DIGIT
+@[always_inline]
+def complete_length : Get String := many1Chars DIGIT
 
-@[inline, specialize]
-def incl_range : m String := do
+@[inline]
+def incl_range : Get String := do
   let first ← many1Chars DIGIT
   skipChar '-'
   let last ← many1Chars DIGIT
   return first ++ "-" ++ last
 
-@[inline, specialize]
-def range_resp : m String := do
+@[inline]
+def range_resp : Get String := do
   let range ← incl_range
   skipChar '/'
-  let tail ← (attempt (pchar '*' *> pure "*")) <|> complete_length
+  let tail ← ((pchar '*' *> pure "*")) <|> complete_length
   return range ++ "/" ++ tail
 
-@[inline, specialize]
-def unsatisfied_range : m String := do
+@[inline]
+def unsatisfied_range : Get String := do
   skipString "*/"
   let len ← complete_length
   return "*/" ++ len
 
-@[inline, specialize]
-def content_range : m String := do
+@[inline]
+def content_range : Get String := do
   let unit ← range_unit
   SP'
   let spec ← range_resp <|> unsatisfied_range
   return unit ++ " " ++ spec
 
-@[always_inline, specialize]
-def content_type : m MediaType := media_type
+@[always_inline]
+def content_type : Get MediaType := media_type
 
-@[always_inline, specialize]
-def GMT : m String := pstring "GMT"
+@[always_inline]
+def GMT : Get String := pstring "GMT"
 
-@[inline, specialize]
-def day_name : m String :=
+@[inline]
+def day_name : Get String :=
   pstring "Mon" <|> pstring "Tue" <|> pstring "Wed" <|> pstring "Thu" <|> pstring "Fri" <|> pstring "Sat" <|> pstring "Sun"
 
-@[inline, specialize]
-def day_name_l : m String :=
+@[inline]
+def day_name_l : Get String :=
   pstring "Monday" <|> pstring "Tuesday" <|> pstring "Wednesday" <|> pstring "Thursday" <|> pstring "Friday" <|> pstring "Saturday" <|> pstring "Sunday"
 
-@[inline, specialize]
-def month : m String :=
+@[inline]
+def month : Get String :=
   pstring "Jan" <|> pstring "Feb" <|> pstring "Mar" <|> pstring "Apr" <|> pstring "May" <|> pstring "Jun" <|> pstring "Jul" <|> pstring "Aug" <|> pstring "Sep" <|> pstring "Oct" <|> pstring "Nov" <|> pstring "Dec"
 
-@[always_inline, specialize]
-def day : m String := chars_to_string <$> takeN 2 DIGIT
+@[always_inline]
+def day : Get String := chars_to_string <$> takeN 2 DIGIT
 
-@[always_inline, specialize]
-def year : m String := chars_to_string <$> takeN 4 DIGIT
+@[always_inline]
+def year : Get String := chars_to_string <$> takeN 4 DIGIT
 
-@[always_inline, specialize]
-def hour : m String := chars_to_string <$> takeN 2 DIGIT
+@[always_inline]
+def hour : Get String := chars_to_string <$> takeN 2 DIGIT
 
-@[always_inline, specialize]
-def minute : m String := chars_to_string <$> takeN 2 DIGIT
+@[always_inline]
+def minute : Get String := chars_to_string <$> takeN 2 DIGIT
 
-@[always_inline, specialize]
-def second : m String := chars_to_string <$> takeN 2 DIGIT
+@[always_inline]
+def second : Get String := chars_to_string <$> takeN 2 DIGIT
 
-@[inline, specialize]
-def time_of_day : m String := do
+@[inline]
+def time_of_day : Get String := do
   let h ← hour
   skipChar ':'
   let m ← minute
@@ -504,8 +504,8 @@ def time_of_day : m String := do
   let s ← second
   return s!"{h}:{m}:{s}"
 
-@[inline, specialize]
-def date1 : m String := do
+@[inline]
+def date1 : Get String := do
   let d ← day
   SP'
   let m ← month
@@ -513,8 +513,8 @@ def date1 : m String := do
   let y ← year
   return s!"{d} {m} {y}"
 
-@[inline, specialize]
-def date2 : m String := do
+@[inline]
+def date2 : Get String := do
   let d ← day
   skipChar '-'
   let m ← month
@@ -522,15 +522,15 @@ def date2 : m String := do
   let y ← chars_to_string <$> takeN 2 DIGIT
   return s!"{d}-{m}-{y}"
 
-@[inline, specialize]
-def date3 : m String := do
+@[inline]
+def date3 : Get String := do
   let m ← month
   SP'
-  let d ← (attempt (chars_to_string <$> takeN 2 DIGIT)) <|> (do skipChar ' '; char_to_string <$> DIGIT)
+  let d ← ((chars_to_string <$> takeN 2 DIGIT)) <|> (do skipChar ' '; char_to_string <$> DIGIT)
   return s!"{m} {d}"
 
-@[inline, specialize]
-def IMF_fixdate : m String := do
+@[inline]
+def IMF_fixdate : Get String := do
   let dn ← day_name
   skipChar ','
   SP'
@@ -541,8 +541,8 @@ def IMF_fixdate : m String := do
   let gmt ← GMT
   return s!"{dn}, {d1} {tod} {gmt}"
 
-@[inline, specialize]
-def rfc850_date : m String := do
+@[inline]
+def rfc850_date : Get String := do
   let dn ← day_name_l
   skipChar ','
   SP'
@@ -553,8 +553,8 @@ def rfc850_date : m String := do
   let gmt ← GMT
   return s!"{dn}, {d2} {tod} {gmt}"
 
-@[inline, specialize]
-def asctime_date : m String := do
+@[inline]
+def asctime_date : Get String := do
   let dn ← day_name
   SP'
   let d3 ← date3
@@ -564,40 +564,40 @@ def asctime_date : m String := do
   let y ← year
   return s!"{dn} {d3} {tod} {y}"
 
-@[inline, specialize]
-def obs_date : m String := rfc850_date <|> asctime_date
+@[inline]
+def obs_date : Get String := rfc850_date <|> asctime_date
 
-@[always_inline, specialize]
-def HTTP_date : m String := IMF_fixdate <|> obs_date
+@[always_inline]
+def HTTP_date : Get String := IMF_fixdate <|> obs_date
 
-@[always_inline, specialize]
-def date : m String := HTTP_date
+@[always_inline]
+def date : Get String := HTTP_date
 
-@[always_inline, specialize]
-def etagc : m Char := satisfy fun c =>
+@[always_inline]
+def etagc : Get Char := satisfy fun c =>
   c == '!' || ('\x23' ≤ c && c ≤ '\x7E') || ('\x80' ≤ c && c ≤ '\xFF')
 
-@[inline, specialize]
-def opaque_tag : m String := do
+@[inline]
+def opaque_tag : Get String := do
   _ ← DQUOTE
   let cs ← manyChars etagc
   _ ← DQUOTE
   return s!"\"{cs}\""
 
-@[always_inline, specialize]
-def weak : m String := pstring "W/"
+@[always_inline]
+def weak : Get String := pstring "W/"
 
-@[inline, specialize]
-def entity_tag : m String := do
+@[inline]
+def entity_tag : Get String := do
   let w? ← optional weak
   let tag ← opaque_tag
   return w?.getD "" ++ tag
 
-@[always_inline, specialize]
-def etag : m String := entity_tag
+@[always_inline]
+def etag : Get String := entity_tag
 
-@[inline, specialize]
-def expectation : m (String × Option (String × Parameters)) := do
+@[inline]
+def expectation : Get (String × Option (String × Parameters)) := do
   let name ← token
   let tail? ← optional do
     skipChar '='
@@ -606,70 +606,70 @@ def expectation : m (String × Option (String × Parameters)) := do
     return (value, params)
   return (name, tail?)
 
-@[inline, specialize]
-def expect : m (Array (String × Option (String × Parameters))) := comma_list expectation
+@[inline]
+def expect : Get (Array (String × Option (String × Parameters))) := comma_list expectation
 
-@[always_inline, specialize]
-def from_ : m String := mailbox
+@[always_inline]
+def from_ : Get String := mailbox
 
-@[inline, specialize]
-def uri_host : m Uri.Host := Uri.Parser.uri_host
+@[inline]
+def uri_host : Get Uri.Host := Uri.Parser.uri_host
 
-@[inline, specialize]
-def host : m (Uri.Host × Option UInt16) := do
+@[inline]
+def host : Get (Uri.Host × Option UInt16) := do
   let h ← uri_host
-  let p? ← optional (attempt (skipChar ':' *> Uri.Parser.port))
+  let p? ← optional ((skipChar ':' *> Uri.Parser.port))
   return (h, p?)
 
-@[always_inline, specialize]
-def http_uri : m Uri := Uri.Parser.http_uri
+@[always_inline]
+def http_uri : Get Uri := Uri.Parser.http_uri
 
-@[always_inline, specialize]
-def https_uri : m Uri := Uri.Parser.https_uri
+@[always_inline]
+def https_uri : Get Uri := Uri.Parser.https_uri
 
-@[inline, specialize]
-def if_match : m (Option (Array String)) := do
-  (attempt (pchar '*' *> pure none)) <|> (some <$> comma_list entity_tag)
+@[inline]
+def if_match : Get (Option (Array String)) := do
+  ((pchar '*' *> pure none)) <|> (some <$> comma_list entity_tag)
 
-@[always_inline, specialize]
-def if_modified_since : m String := HTTP_date
+@[always_inline]
+def if_modified_since : Get String := HTTP_date
 
-@[inline, specialize]
-def if_none_match : m (Option (Array String)) := do
-  (attempt (pchar '*' *> pure none)) <|> (some <$> comma_list entity_tag)
+@[inline]
+def if_none_match : Get (Option (Array String)) := do
+  ((pchar '*' *> pure none)) <|> (some <$> comma_list entity_tag)
 
-@[inline, specialize]
-def if_range : m String := entity_tag <|> HTTP_date
+@[inline]
+def if_range : Get String := entity_tag <|> HTTP_date
 
-@[always_inline, specialize]
-def if_unmodified_since : m String := HTTP_date
+@[always_inline]
+def if_unmodified_since : Get String := HTTP_date
 
-@[always_inline, specialize]
-def last_modified : m String := HTTP_date
+@[always_inline]
+def last_modified : Get String := HTTP_date
 
-@[always_inline, specialize]
-def location : m Uri := Uri.Parser.uri_reference
+@[always_inline]
+def location : Get Uri := Uri.Parser.uri_reference
 
-@[always_inline, specialize]
-def max_forwards : m Nat := decimal_nat
+@[always_inline]
+def max_forwards : Get Nat := decimal_nat
 
-@[inline, specialize]
-def proxy_authenticate : m (Array (String × Option (Sum String (Array Parameter)))) := comma_list challenge
+@[inline]
+def proxy_authenticate : Get (Array (String × Option (Sum String (Array Parameter)))) := comma_list challenge
 
-@[always_inline, specialize]
-def proxy_authentication_info : m (Array Parameter) := auth_param_list
+@[always_inline]
+def proxy_authentication_info : Get (Array Parameter) := auth_param_list
 
-@[always_inline, specialize]
-def proxy_authorization : m (String × Option (Sum String (Array Parameter))) := credentials
+@[always_inline]
+def proxy_authorization : Get (String × Option (Sum String (Array Parameter))) := credentials
 
-@[inline, specialize]
-def first_pos : m String := many1Chars DIGIT
+@[inline]
+def first_pos : Get String := many1Chars DIGIT
 
-@[inline, specialize]
-def last_pos : m String := many1Chars DIGIT
+@[inline]
+def last_pos : Get String := many1Chars DIGIT
 
-@[inline, specialize]
-def int_range : m String := do
+@[inline]
+def int_range : Get String := do
   let first ← first_pos
   skipChar '-'
   let last? ← optional last_pos
@@ -677,120 +677,120 @@ def int_range : m String := do
     | none => first ++ "-"
     | some last => first ++ "-" ++ last
 
-@[inline, specialize]
-def suffix_length : m String := many1Chars DIGIT
+@[inline]
+def suffix_length : Get String := many1Chars DIGIT
 
-@[inline, specialize]
-def suffix_range : m String := do
+@[inline]
+def suffix_range : Get String := do
   skipChar '-'
   let len ← suffix_length
   return "-" ++ len
 
-@[inline, specialize]
-def other_range : m String := do
+@[inline]
+def other_range : Get String := do
   let cs ← many1Chars <| satisfy fun c =>
     ('\x21' ≤ c && c ≤ '\x2B') || ('\x2D' ≤ c && c ≤ '\x7E')
   return cs
 
-@[inline, specialize]
-def range_spec : m String := int_range <|> suffix_range <|> other_range
+@[inline]
+def range_spec : Get String := int_range <|> suffix_range <|> other_range
 
-@[inline, specialize]
-def range_set : m (Array String) := comma_list range_spec
+@[inline]
+def range_set : Get (Array String) := comma_list range_spec
 
-@[inline, specialize]
-def ranges_specifier : m (String × Array String) := do
+@[inline]
+def ranges_specifier : Get (String × Array String) := do
   let unit ← range_unit
   skipChar '='
   let rs ← range_set
   return (unit, rs)
 
-@[always_inline, specialize]
-def range : m (String × Array String) := ranges_specifier
+@[always_inline]
+def range : Get (String × Array String) := ranges_specifier
 
-@[always_inline, specialize]
-def absolute_path : m String := Uri.Parser.absolute_path
+@[always_inline]
+def absolute_path : Get String := Uri.Parser.absolute_path
 
-@[always_inline, specialize]
-def partial_uri : m Uri := Uri.Parser.partial_uri
+@[always_inline]
+def partial_uri : Get Uri := Uri.Parser.partial_uri
 
-@[always_inline, specialize]
-def referer : m Uri := absolute_URI <|> partial_uri
+@[always_inline]
+def referer : Get Uri := absolute_URI <|> partial_uri
 
-@[always_inline, specialize]
-def delay_seconds : m Nat := decimal_nat
+@[always_inline]
+def delay_seconds : Get Nat := decimal_nat
 
-@[always_inline, specialize]
-def retry_after : m String := HTTP_date <|> (toString <$> delay_seconds)
+@[always_inline]
+def retry_after : Get String := HTTP_date <|> (toString <$> delay_seconds)
 
-@[inline, specialize]
-def product : m (String × Option String) := do
+@[inline]
+def product : Get (String × Option String) := do
   let name ← token
   let ver? ← optional do
     skipChar '/'
     token
   return (name, ver?)
 
-@[always_inline, specialize]
-def product_version : m String := token
+@[always_inline]
+def product_version : Get String := token
 
-@[always_inline, specialize]
-def protocol_name : m String := token
+@[always_inline]
+def protocol_name : Get String := token
 
-@[always_inline, specialize]
-def protocol_version : m String := token
+@[always_inline]
+def protocol_version : Get String := token
 
-@[inline, specialize]
-def protocol : m (String × Option String) := do
+@[inline]
+def protocol : Get (String × Option String) := do
   let name ← protocol_name
   let ver? ← optional do
     skipChar '/'
     protocol_version
   return (name, ver?)
 
-@[always_inline, specialize]
-def received_by : m (String × Option UInt16) := do
+@[always_inline]
+def received_by : Get (String × Option UInt16) := do
   let name ← token
-  let port? ← optional (attempt (skipChar ':' *> Uri.Parser.port))
+  let port? ← optional ((skipChar ':' *> Uri.Parser.port))
   return (name, port?)
 
-@[inline, specialize]
-def received_protocol : m (Option String × String) := do
-  let prefix? ← optional (attempt (protocol_name <* skipChar '/'))
+@[inline]
+def received_protocol : Get (Option String × String) := do
+  let prefix? ← optional ((protocol_name <* skipChar '/'))
   let ver ← protocol_version
   return (prefix?, ver)
 
-@[always_inline, specialize]
-def pseudonym : m String := token
+@[always_inline]
+def pseudonym : Get String := token
 
-@[inline, specialize]
-def server : m (String × Array String) := do
+@[inline]
+def server : Get (String × Array String) := do
   let first ← product
   let firstStr := match first with
     | (n, none) => n
     | (n, some v) => s!"{n}/{v}"
-  let rest ← many (RWS *> (attempt (do
+  let rest ← many (RWS *> ((do
     let p ← product
     return match p with
       | (n, none) => n
       | (n, some v) => s!"{n}/{v}") <|> comment))
   return (firstStr, rest)
 
-@[inline, specialize]
-def user_agent : m (String × Array String) := do
+@[inline]
+def user_agent : Get (String × Array String) := do
   let first ← product
   let firstStr := match first with
     | (n, none) => n
     | (n, some v) => s!"{n}/{v}"
-  let rest ← many (RWS *> (attempt (do
+  let rest ← many (RWS *> ((do
     let p ← product
     return match p with
       | (n, none) => n
       | (n, some v) => s!"{n}/{v}") <|> comment))
   return (firstStr, rest)
 
-@[inline, specialize]
-def transfer_parameter : m Parameter := do
+@[inline]
+def transfer_parameter : Get Parameter := do
   let name ← token
   _ ← BWS
   skipChar '='
@@ -798,40 +798,40 @@ def transfer_parameter : m Parameter := do
   let value ← token <|> quoted_string
   return (name, value)
 
-@[inline, specialize]
-def transfer_coding : m (String × Array Parameter) := do
+@[inline]
+def transfer_coding : Get (String × Array Parameter) := do
   let name ← token
   let params ← many (OWS *> skipChar ';' *> OWS *> transfer_parameter)
   return (name, params)
 
-@[inline, specialize]
-def t_codings : m (String × Array Parameter × Option String) := do
-  (attempt (pstring "trailers" *> pure ("trailers", #[], none)))
+@[inline]
+def t_codings : Get (String × Array Parameter × Option String) := do
+  ((pstring "trailers" *> pure ("trailers", #[], none)))
     <|> (do
       let (name, params) ← transfer_coding
       let wt? ← optional weight
       return (name, params, wt?))
 
-@[inline, specialize]
-def TE : m (Array (String × Array Parameter × Option String)) := comma_list t_codings
+@[inline]
+def TE : Get (Array (String × Array Parameter × Option String)) := comma_list t_codings
 
-@[always_inline, specialize]
-def trailer : m (Array String) := comma_list field_name
+@[always_inline]
+def trailer : Get (Array String) := comma_list field_name
 
-@[inline, specialize]
-def transfer_encoding : m (Array (String × Array Parameter)) := comma_list transfer_coding
+@[inline]
+def transfer_encoding : Get (Array (String × Array Parameter)) := comma_list transfer_coding
 
-@[inline, specialize]
-def upgrade : m (Array (String × Option String)) := comma_list protocol
+@[inline]
+def upgrade : Get (Array (String × Option String)) := comma_list protocol
 
-@[inline, specialize]
-def vary : m (Array String) := do
+@[inline]
+def vary : Get (Array String) := do
   let item := (pstring "*" <|> field_name)
   comma_list item
 
-@[inline, specialize]
-def via : m (Array (Option String × String × (String × Option UInt16) × Option String)) := do
-  let item : m (Option String × String × (String × Option UInt16) × Option String) := do
+@[inline]
+def via : Get (Array (Option String × String × (String × Option UInt16) × Option String)) := do
+  let item : Get (Option String × String × (String × Option UInt16) × Option String) := do
     let (pn?, pv) ← received_protocol
     _ ← RWS
     let rb ← received_by
@@ -839,77 +839,76 @@ def via : m (Array (Option String × String × (String × Option UInt16) × Opti
     return (pn?, pv, rb, comment?)
   comma_list item
 
-@[inline, specialize]
-def www_authenticate : m (Array (String × Option (Sum String (Array Parameter)))) := comma_list challenge
+@[inline]
+def www_authenticate : Get (Array (String × Option (Sum String (Array Parameter)))) := comma_list challenge
 
-@[always_inline, specialize]
-def uri_reference : m Uri := Uri.Parser.uri_reference
+@[always_inline]
+def uri_reference : Get Uri := Uri.Parser.uri_reference
 
-@[inline, specialize]
-def start_line : m StartLine :=
-  attempt (request_line <&> StartLine.request)
+@[inline]
+def start_line : Get StartLine :=
+  (request_line <&> StartLine.request)
   <|> (status_line <&> StartLine.status)
 
-@[always_inline, specialize]
-def message_body : m String := manyChars OCTET
+@[always_inline]
+def chunk_size : Get Nat := hex_nat
 
-@[inline, specialize]
-def http_message : m HttpMessage := do
-  let start ← start_line
-  CRLF
-  let fields ← many (field_line <* CRLF)
-  CRLF
-  let body ← message_body
-  let body? := if body.isEmpty then none else some body
-  return { start_line := start, fields, body? }
+@[always_inline]
+def chunk_ext_name : Get String := token
 
-@[inline, specialize]
-def chunk_size : m Nat := hex_nat
+@[always_inline]
+def chunk_ext_val : Get String := token <|> quoted_string
 
-@[inline, specialize]
-def chunk_ext_name : m String := token
+@[inline]
+def chunk_ext : Get (Array ChunkExt) := many do
+  _ ← BWS
+  skipChar ';'
+  _ ← BWS
+  let name ← chunk_ext_name
+  let value? ← optional do
+    _ ← BWS
+    skipChar '='
+    _ ← BWS
+    chunk_ext_val
+  return { name, value? }
 
-@[inline, specialize]
-def chunk_ext_val : m String := token <|> quoted_string
-
-@[inline, specialize]
-def chunk_ext : m (Array ChunkExt) := do
-  let mut xs := #[]
-  repeat
-    if let some name ← optional (attempt (BWS *> skipChar ';' *> BWS *> chunk_ext_name)) then
-      let value? ← optional (attempt (BWS *> skipChar '=' *> BWS *> chunk_ext_val))
-      xs := xs.push { name, value? }
-    else break
-  return xs
-
-@[inline, specialize]
-def chunk_data : m String := many1Chars OCTET
-
-@[inline, specialize]
-def chunk : m Chunk := do
+@[inline]
+def chunk : Get Chunk := do
   let size ← chunk_size
   let ext ← chunk_ext
   CRLF
-  let data ← chunk_data
+  let data ← get_bytes size
   CRLF
   return { size, ext, data }
 
-@[inline, specialize]
-def last_chunk : m (Array ChunkExt) := do
-  _ ← many1Chars (pchar '0')
+@[inline]
+def last_chunk : Get Chunk := do
+  _ ← many1 (satisfy fun x => x == '0')
   let ext ← chunk_ext
   CRLF
-  return ext
+  return { size := 0, ext, data := {} }
 
-@[inline, specialize]
-def trailer_section : m (Array FieldLine) := many (field_line <* CRLF)
+@[always_inline]
+def trailer_section : Get (Array FieldLine) := many (field_line <* CRLF)
 
-@[inline, specialize]
-def chunked_body : m ChunkedBody := do
-  let chunks ← many chunk
-  _ ← last_chunk
+@[inline]
+def chunked_body : Get ChunkedBody := do
+  let chunks ← many <| pending do
+    chunk <* shrink -- shrink to drop parsed chunks from inner buffer
+  pending do
+  let lastChunk ← last_chunk
+  pending do
   let trailer ← trailer_section
   CRLF
-  return { chunks, trailer }
+  return { chunks, lastChunk, trailer }
+
+@[inline]
+def http_message_header : Get HttpMessageHeader := do
+  let start ← start_line
+  pending do -- checkpoint
+  CRLF
+  let fields ← many <| pending (field_line <* CRLF) -- checkpoints
+  CRLF
+  return { start_line := start, fields }
 
 end Http.Http1_1.Parser

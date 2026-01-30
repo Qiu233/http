@@ -1,6 +1,6 @@
 module
 
-public import Uri
+public import Uri.Basic
 
 public section
 
@@ -45,10 +45,9 @@ inductive StartLine where
   | status (line : StatusLine)
 deriving Inhabited
 
-structure HttpMessage where
+structure HttpMessageHeader where
   start_line : StartLine
   fields : Array FieldLine
-  body? : Option String
 deriving Inhabited
 
 structure ChunkExt where
@@ -59,10 +58,21 @@ deriving Inhabited, Repr
 structure Chunk where
   size : Nat
   ext : Array ChunkExt
-  data : String
-deriving Inhabited, Repr
+  data : ByteArray
+deriving Inhabited
 
 structure ChunkedBody where
   chunks : Array Chunk
+  lastChunk : Chunk
   trailer : Array FieldLine
-deriving Inhabited, Repr
+deriving Inhabited
+
+inductive HttpMessageBody where
+  | bytes (data : ByteArray)
+  | chunked (body : ChunkedBody)
+deriving Inhabited
+
+structure HttpMessage where
+  header : HttpMessageHeader
+  body? : Option HttpMessageBody
+deriving Inhabited

@@ -43,6 +43,9 @@ section
 
 namespace Http.Http1_1
 
+instance : Repr (ByteArray) where
+  reprPrec x _ := s!"{repr x.data}"
+
 deriving instance Repr for Std.Net.IPv4Addr
 deriving instance Repr for Std.Net.IPv6Addr
 deriving instance Repr for Uri.Host
@@ -51,6 +54,10 @@ deriving instance Repr for Uri
 deriving instance Repr for RequestTarget
 deriving instance Repr for RequestLine
 deriving instance Repr for StartLine
+deriving instance Repr for HttpMessageHeader
+deriving instance Repr for Chunk
+deriving instance Repr for ChunkedBody
+deriving instance Repr for HttpMessageBody
 deriving instance Repr for HttpMessage
 
 def s : String := "GET / HTTP/1.1
@@ -71,9 +78,6 @@ def t : IO Unit := do
 --   let resp := Http.Http1_1.Parser.http_message (m := Parser) |>.run resp
 --   println! "{repr resp}"
 -- #eval t
-
-instance : Repr (ByteArray) where
-  reprPrec x _ := s!"{repr x.data}"
 
 deriving instance Repr for Response
 

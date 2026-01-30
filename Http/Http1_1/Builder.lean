@@ -59,12 +59,6 @@ def startLineString : StartLine → String
 def fieldLinesString (fields : Array FieldLine) : String :=
   String.intercalate crlf <| fields.toList.map fieldLineString
 
-def httpMessageString (msg : HttpMessage) : String :=
-  let fields := fieldLinesString msg.fields
-  let fieldsBlock := if fields.isEmpty then "" else fields ++ crlf
-  let body := msg.body?.getD ""
-  startLineString msg.start_line ++ crlf ++ fieldsBlock ++ crlf ++ body
-
 @[inline]
 def hexDigit (n : Nat) : Char :=
   if n < 10 then
@@ -94,14 +88,26 @@ def chunkExtString (exts : Array ChunkExt) : String :=
     acc ++ ";" ++ ext.name ++ value
 
 @[inline]
-def chunkString (chunk : Chunk) : String :=
-  natToHex chunk.size ++ chunkExtString chunk.ext ++ crlf ++ chunk.data ++ crlf
+def chunkBytes (chunk : Chunk) : ByteArray :=
+  let head := natToHex chunk.size ++ chunkExtString chunk.ext ++ crlf
+  head.toUTF8.append chunk.data |>.append crlf.toUTF8
 
-def chunkedBodyString (body : ChunkedBody) : String :=
-  let chunks := String.intercalate "" <| body.chunks.toList.map chunkString
+def chunkedBodyBytes (body : ChunkedBody) : ByteArray :=
+  let chunks := body.chunks.foldl (init := ByteArray.empty) fun acc chunk =>
+    acc.append (chunkBytes chunk)
   let trailers := fieldLinesString body.trailer
   let trailersBlock := if trailers.isEmpty then "" else trailers ++ crlf
-  chunks ++ "0" ++ crlf ++ trailersBlock ++ crlf
+  chunks.append ("0" ++ crlf ++ trailersBlock ++ crlf).toUTF8
+
+def httpMessageBytes (msg : HttpMessage) : ByteArray :=
+  let fields := fieldLinesString msg.header.fields
+  let fieldsBlock := if fields.isEmpty then "" else fields ++ crlf
+  let body := match msg.body? with
+    | none => ByteArray.empty
+    | some (.bytes bs) => bs
+    | some (.chunked cb) => chunkedBodyBytes cb
+  let h := startLineString msg.header.start_line ++ crlf ++ fieldsBlock ++ crlf |>.toUTF8
+  h ++ body
 
 end Http.Http1_1.Builder
 

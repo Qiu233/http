@@ -39,10 +39,10 @@ private def requestTargetFromHttp1 : Http.Http1_1.RequestTarget → RequestTarge
   | .authority auth => .authority auth
   | .asterisk => .asterisk
 
-open PolyParsec.Std in
 @[always_inline]
-def RequestTarget.parse? (target : String) : Except String RequestTarget :=
-  requestTargetFromHttp1 <$> (Http1_1.Parser.request_target (m := Std.Internal.Parsec.String.Parser)).run target
+def RequestTarget.parse? (target : String) : Except String RequestTarget := do
+  let bytes := target.toUTF8
+  requestTargetFromHttp1 <$> ((Http1_1.Parser.request_target).run bytes |>.toExceptString)
 
 structure Request where
   method : String
@@ -63,35 +63,32 @@ def headerToFieldLine (h : Header) : Http.Http1_1.FieldLine :=
   { name := h.name, value := #[h.value] }
 
 @[inline]
-def bodyToString? (body? : Option ByteArray) : Option String :=
-  -- HTTP/1.1 builders are String-based, so we assume UTF-8 for now.
-  body?.map String.fromUTF8!
-
-@[inline]
 def requestToHttp1 (req : Request) : Http.Http1_1.HttpMessage :=
-  { start_line := .request
-      { method := req.method
-        request_target := requestTargetToHttp1 req.target
-        version := { major := 1, minor := 1 } }
-    fields := req.headers.map headerToFieldLine
-    body? := bodyToString? req.body? }
+  { header := {
+      start_line := .request {
+          method := req.method
+          request_target := requestTargetToHttp1 req.target
+          version := { major := 1, minor := 1 } }
+      fields := req.headers.map headerToFieldLine }
+    body? := Http.Http1_1.HttpMessageBody.bytes <$> req.body? }
 
 @[inline]
 def responseToHttp1 (resp : Response) : Http.Http1_1.HttpMessage :=
-  { start_line := .status
+  { header := {
+    start_line := .status
       { version := { major := 1, minor := 1 }
         status_code := resp.status
         reason? := resp.reason? }
-    fields := resp.headers.map headerToFieldLine
-    body? := bodyToString? resp.body? }
+    fields := resp.headers.map headerToFieldLine }
+    body? := Http.Http1_1.HttpMessageBody.bytes <$> resp.body? }
 
 @[inline]
-def requestToHttp1String (req : Request) : String :=
-  Http.Http1_1.Builder.httpMessageString (requestToHttp1 req)
+def requestToHttp1Bytes (req : Request) : ByteArray :=
+  Http.Http1_1.Builder.httpMessageBytes (requestToHttp1 req)
 
 @[inline]
-def responseToHttp1String (resp : Response) : String :=
-  Http.Http1_1.Builder.httpMessageString (responseToHttp1 resp)
+def responseToHttp1Bytes (resp : Response) : ByteArray :=
+  Http.Http1_1.Builder.httpMessageBytes (responseToHttp1 resp)
 
 @[inline]
 def requestTargetPath (target : RequestTarget) : String :=

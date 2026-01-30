@@ -1,5 +1,8 @@
 module
 public import Uri
+public import Uri.Basic
+public import Binary
+public import Http.Parser.Util
 
 /-!
 See RFC9110 §4.Identifiers in HTTP
@@ -9,29 +12,19 @@ public section
 
 namespace Uri.Parser
 
+open Binary UTF8
+open Http.Parser
 
-variable {m} [instMonad : Monad m] [instOrElse : ∀ α, OrElse (m α)] [instParser : PolyParsec.MonadPolyParsec String m]
-
-open PolyParsec
-
-@[always_inline, specialize]
-def uri_host : m Host := host
-
-@[always_inline, specialize]
-def absolute_path : m (String) := do
-  let ss ← many1 (skipChar '/' *> segment)
-  return String.intercalate "" <| ss.toList.map (fun x => s!"/{x}")
-
-@[specialize]
-def partial_uri : m Uri := do
+@[inline]
+def partial_uri : Get Uri := do
   let (auth?, path) ← relative_part
   let query? ← optional do
     skipChar '?'
     query
   return { scheme? := none, authority? := auth?, path, query? }
 
-@[specialize]
-private def uri_helper (scheme : String) : m Uri := do
+@[inline]
+private def uri_helper (scheme : String) : Get Uri := do
   skipString scheme
   skipString "://"
   let auth ← authority
@@ -41,11 +34,11 @@ private def uri_helper (scheme : String) : m Uri := do
     query
   return { scheme? := some scheme, authority? := some auth, path, query? }
 
-@[always_inline, specialize]
-def http_uri : m Uri := uri_helper "http"
+@[always_inline]
+def http_uri : Get Uri := uri_helper "http"
 
-@[always_inline, specialize]
-def https_uri : m Uri := uri_helper "https"
+@[always_inline]
+def https_uri : Get Uri := uri_helper "https"
 
 end Uri.Parser
 

@@ -1,41 +1,39 @@
 module
 
-public import Uri
+public import Binary
 public import Http.Parser.Util
 
 public section
 
 namespace Http.Parser
 
-variable {m} [instMonad : Monad m] [instOrElse : ∀ α, OrElse (m α)] [instParser : PolyParsec.MonadPolyParsec String m]
+open Binary UTF8
 
-open PolyParsec
+@[inline]
+def alphanum : Get Char := satisfy fun c => c.isAlpha || c.isDigit
 
-@[inline, specialize]
-def alphanum : m Char := satisfy fun c => c.isAlpha || c.isDigit
-
-@[inline, specialize]
-def subtag_len (min max : Nat) (p : m Char) : m String := do
+@[inline]
+def subtag_len (min max : Nat) (p : Get Char) : Get String := do
   let head ← takeN min p
   let tail ← takeUpTo (max - min) p
   let xs := head ++ tail
   if tail.size == max - min then
     _ ← notFollowedBy p
-  return chars_to_string xs
+  return String.ofList xs.toList
 
-@[inline, specialize]
-def alpha_subtag (min max : Nat) : m String :=
+@[inline]
+def alpha_subtag (min max : Nat) : Get String :=
   subtag_len min max ALPHA
 
-@[inline, specialize]
-def alphanum_subtag (min max : Nat) : m String :=
+@[inline]
+def alphanum_subtag (min max : Nat) : Get String :=
   subtag_len min max alphanum
 
-@[inline, specialize]
-def language_range : m String := do
-  (attempt (pchar '*' *> pure "*")) <|> (do
+@[inline]
+def language_range : Get String := do
+  (pchar '*' *> pure "*") <|> (do
     let first ← alpha_subtag 1 8
-    let rest ← many (attempt (skipChar '-' *> alphanum_subtag 1 8))
+    let rest ← many (skipChar '-' *> alphanum_subtag 1 8)
     return String.intercalate "-" (first :: rest.toList))
 
 end Http.Parser

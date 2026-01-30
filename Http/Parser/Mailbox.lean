@@ -1,141 +1,139 @@
 module
 
-public import Uri
+public import Binary
 public import Http.Parser.Util
 
 public section
 
 namespace Http.Parser
 
-variable {m} [instMonad : Monad m] [instOrElse : ∀ α, OrElse (m α)] [instParser : PolyParsec.MonadPolyParsec String m]
+open Binary UTF8
 
-open PolyParsec
+@[inline]
+def mbx_WSP : Get Char := SP <|> HTAB
 
-@[inline, specialize]
-def mbx_WSP : m Char := SP <|> HTAB
-
-@[inline, specialize]
-def mbx_FWS : m String := do
+@[inline]
+def mbx_FWS : Get String := do
   let _ ← optional (manyChars mbx_WSP *> CRLF)
   many1Chars mbx_WSP
 
-@[inline, specialize]
-def mbx_ctext : m Char := satisfy fun c =>
+@[inline]
+def mbx_ctext : Get Char := satisfy fun c =>
   ('\x21' ≤ c && c ≤ '\x27') ||
   ('\x2A' ≤ c && c ≤ '\x5B') ||
   ('\x5D' ≤ c && c ≤ '\x7E')
 
-@[inline, specialize]
-def mbx_quoted_pair : m String := do
+@[inline]
+def mbx_quoted_pair : Get String := do
   skipChar '\\'
   let c ← vchar <|> mbx_WSP
   return "\\" ++ c.toString
 
-partial def mbx_comment : m String := do
+partial def mbx_comment : Get String := do
   skipChar '('
-  let parts ← many <| attempt (mbx_FWS *> (do
-    let inner ← attempt mbx_comment <|> mbx_quoted_pair <|> (char_to_string <$> mbx_ctext)
-    return inner)) <|> attempt mbx_comment <|> mbx_quoted_pair <|> (char_to_string <$> mbx_ctext)
+  let parts ← many <| (mbx_FWS *> (do
+    let inner ← mbx_comment <|> mbx_quoted_pair <|> (char_to_string <$> mbx_ctext)
+    return inner)) <|> mbx_comment <|> mbx_quoted_pair <|> (char_to_string <$> mbx_ctext)
   _ ← optional mbx_FWS
   skipChar ')'
   return "(" ++ String.intercalate "" parts.toList ++ ")"
 
-@[inline, specialize]
-def mbx_CFWS : m String := do
-  (attempt do
-    let parts ← many1 (attempt (optional mbx_FWS *> mbx_comment))
+@[inline]
+def mbx_CFWS : Get String := do
+  (do
+    let parts ← many1 (optional mbx_FWS *> mbx_comment)
     let tail ← optional mbx_FWS
     let mut out := String.intercalate "" (parts.toList)
     if let some t := tail then out := out ++ t
     return out)
   <|> mbx_FWS
 
-@[inline, specialize]
-def mbx_atext : m Char := satisfy fun c =>
+@[inline]
+def mbx_atext : Get Char := satisfy fun c =>
   c.isAlpha || c.isDigit ||
     c matches '!' | '#' | '$' | '%' | '&' | '\'' | '*' | '+' | '-' |
       '/' | '=' | '?' | '^' | '_' | '`' | '{' | '|' | '}' | '~'
 
-@[inline, specialize]
-def mbx_atom : m String := do
+@[inline]
+def mbx_atom : Get String := do
   _ ← optional mbx_CFWS
   let core ← many1Chars mbx_atext
   _ ← optional mbx_CFWS
   return core
 
-@[inline, specialize]
-def mbx_dot_atom_text : m String := do
+@[inline]
+def mbx_dot_atom_text : Get String := do
   let first ← many1Chars mbx_atext
-  let rest ← many (attempt (skipChar '.' *> many1Chars mbx_atext))
+  let rest ← many (skipChar '.' *> many1Chars mbx_atext)
   let mut out := first
   for part in rest.toList do
     out := out ++ "." ++ part
   return out
 
-@[inline, specialize]
-def mbx_dot_atom : m String := do
+@[inline]
+def mbx_dot_atom : Get String := do
   _ ← optional mbx_CFWS
   let core ← mbx_dot_atom_text
   _ ← optional mbx_CFWS
   return core
 
-@[inline, specialize]
-def mbx_qtext : m Char := satisfy fun c =>
+@[inline]
+def mbx_qtext : Get Char := satisfy fun c =>
   c == '\x21' || ('\x23' ≤ c && c ≤ '\x5B') || ('\x5D' ≤ c && c ≤ '\x7E')
 
-@[inline, specialize]
-def mbx_quoted_string : m String := do
+@[inline]
+def mbx_quoted_string : Get String := do
   _ ← optional mbx_CFWS
   _ ← DQUOTE
-  let parts ← many (attempt (optional mbx_FWS *> (do
+  let parts ← many (optional mbx_FWS *> (do
     let qcontent ← (char_to_string <$> mbx_qtext) <|> mbx_quoted_pair
-    return qcontent)))
+    return qcontent))
   _ ← optional mbx_FWS
   _ ← DQUOTE
   _ ← optional mbx_CFWS
   return String.intercalate "" parts.toList
 
-@[inline, specialize]
-def mbx_word : m String := mbx_atom <|> mbx_quoted_string
+@[inline]
+def mbx_word : Get String := mbx_atom <|> mbx_quoted_string
 
-@[inline, specialize]
-def mbx_phrase : m String := do
+@[inline]
+def mbx_phrase : Get String := do
   let first ← mbx_word
-  let rest ← many (attempt (mbx_FWS *> mbx_word))
+  let rest ← many (mbx_FWS *> mbx_word)
   let mut out := first
   for part in rest.toList do
     out := out ++ " " ++ part
   return out
 
-@[inline, specialize]
-def mbx_local_part : m String := mbx_dot_atom <|> mbx_quoted_string
+@[inline]
+def mbx_local_part : Get String := mbx_dot_atom <|> mbx_quoted_string
 
-@[inline, specialize]
-def mbx_dtext : m Char := satisfy fun c =>
+@[inline]
+def mbx_dtext : Get Char := satisfy fun c =>
   ('\x21' ≤ c && c ≤ '\x5A') || ('\x5E' ≤ c && c ≤ '\x7E')
 
-@[inline, specialize]
-def mbx_domain_literal : m String := do
+@[inline]
+def mbx_domain_literal : Get String := do
   _ ← optional mbx_CFWS
   skipChar '['
-  let parts ← many (attempt (optional mbx_FWS *> (char_to_string <$> mbx_dtext)))
+  let parts ← many (optional mbx_FWS *> (char_to_string <$> mbx_dtext))
   _ ← optional mbx_FWS
   skipChar ']'
   _ ← optional mbx_CFWS
   return "[" ++ String.intercalate "" parts.toList ++ "]"
 
-@[inline, specialize]
-def mbx_domain : m String := mbx_dot_atom <|> mbx_domain_literal
+@[inline]
+def mbx_domain : Get String := mbx_dot_atom <|> mbx_domain_literal
 
-@[inline, specialize]
-def mbx_addr_spec : m String := do
+@[inline]
+def mbx_addr_spec : Get String := do
   let local_ ← mbx_local_part
   skipChar '@'
   let dom ← mbx_domain
   return local_ ++ "@" ++ dom
 
-@[inline, specialize]
-def mbx_angle_addr : m String := do
+@[inline]
+def mbx_angle_addr : Get String := do
   _ ← optional mbx_CFWS
   skipChar '<'
   let addr ← mbx_addr_spec
@@ -143,15 +141,15 @@ def mbx_angle_addr : m String := do
   _ ← optional mbx_CFWS
   return "<" ++ addr ++ ">"
 
-@[inline, specialize]
-def mbx_name_addr : m String := do
+@[inline]
+def mbx_name_addr : Get String := do
   let display? ← optional mbx_phrase
   let addr ← mbx_angle_addr
   return match display? with
     | none => addr
     | some d => d ++ " " ++ addr
 
-@[inline, specialize]
-def mailbox : m String := (attempt mbx_name_addr) <|> mbx_addr_spec
+@[inline]
+def mailbox : Get String := (mbx_name_addr) <|> mbx_addr_spec
 
 end Http.Parser

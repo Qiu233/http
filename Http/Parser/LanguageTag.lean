@@ -1,6 +1,6 @@
 module
 
-public import Uri
+public import Binary
 public import Http.Parser.Util
 public import Http.Parser.LanguageRange
 
@@ -8,84 +8,82 @@ public section
 
 namespace Http.Parser
 
-variable {m} [instMonad : Monad m] [instOrElse : ∀ α, OrElse (m α)] [instParser : PolyParsec.MonadPolyParsec String m]
+open Binary UTF8
 
-open PolyParsec
-
-@[inline, specialize]
-def language_tag_extlang : m String := do
+@[inline]
+def language_tag_extlang : Get String := do
   let first ← alpha_subtag 3 3
-  let rest ← many (attempt (skipChar '-' *> alpha_subtag 3 3))
+  let rest ← many (skipChar '-' *> alpha_subtag 3 3)
   let rest := rest.toList
   if rest.length > 2 then
     fail "extlang too long"
   return String.intercalate "-" (first :: rest)
 
-@[inline, specialize]
-def language_tag_language : m String :=
-  (attempt do
+@[inline]
+def language_tag_language : Get String :=
+  (do
     let primary ← alpha_subtag 2 3
-    let ext? ← optional (attempt (skipChar '-' *> language_tag_extlang))
+    let ext? ← optional (skipChar '-' *> language_tag_extlang)
     return match ext? with
       | none => primary
       | some ext => primary ++ "-" ++ ext)
-  <|> (attempt (alpha_subtag 4 4))
+  <|> (alpha_subtag 4 4)
   <|> (alpha_subtag 5 8)
 
-@[inline, specialize]
-def language_tag_script : m String := alpha_subtag 4 4
+@[inline]
+def language_tag_script : Get String := alpha_subtag 4 4
 
-@[inline, specialize]
-def language_tag_region : m String :=
+@[inline]
+def language_tag_region : Get String :=
   alpha_subtag 2 2 <|> subtag_len 3 3 DIGIT
 
-@[inline, specialize]
-def language_tag_variant_digit : m String := do
+@[inline]
+def language_tag_variant_digit : Get String := do
   let first ← DIGIT
   let rest ← takeN 3 alphanum
   _ ← notFollowedBy alphanum
-  return first.toString ++ chars_to_string rest
+  return first.toString ++ String.ofList rest.toList
 
-@[inline, specialize]
-def language_tag_variant : m String :=
-  (attempt language_tag_variant_digit) <|> alphanum_subtag 5 8
+@[inline]
+def language_tag_variant : Get String :=
+  (language_tag_variant_digit) <|> alphanum_subtag 5 8
 
-@[inline, specialize]
-def language_tag_singleton : m String := do
+@[inline]
+def language_tag_singleton : Get String := do
   let c ← satisfy fun c =>
     c.isDigit ||
       ('A' ≤ c && c ≤ 'W') || ('Y' ≤ c && c ≤ 'Z') ||
       ('a' ≤ c && c ≤ 'w') || ('y' ≤ c && c ≤ 'z')
   return c.toString
 
-@[inline, specialize]
-def language_tag_extension : m String := do
+@[inline]
+def language_tag_extension : Get String := do
   let singleton ← language_tag_singleton
-  let subtags ← many1 (attempt (skipChar '-' *> alphanum_subtag 2 8))
+  let subtags ← many1 (skipChar '-' *> alphanum_subtag 2 8)
   return String.intercalate "-" (singleton :: subtags.toList)
 
-@[inline, specialize]
-def language_tag_variants : m (Array String) :=
-  many (attempt (skipChar '-' *> language_tag_variant))
+@[inline]
+def language_tag_variants : Get (Array String) :=
+  many (skipChar '-' *> language_tag_variant)
 
-@[inline, specialize]
-def language_tag_extensions : m (Array String) :=
-  many (attempt (skipChar '-' *> language_tag_extension))
+@[inline]
+def language_tag_extensions : Get (Array String) :=
+  many (skipChar '-' *> language_tag_extension)
 
-@[inline, specialize]
-def language_tag_privateuse : m String := do
+@[inline]
+def language_tag_privateuse : Get String := do
   let x ← satisfy fun c => c == 'x' || c == 'X'
-  let subtags ← many1 (attempt (skipChar '-' *> alphanum_subtag 1 8))
+  let subtags ← many1 (skipChar '-' *> alphanum_subtag 1 8)
   return String.intercalate "-" (x.toString :: subtags.toList)
 
-@[inline, specialize]
-def language_tag_langtag : m String := do
+@[inline]
+def language_tag_langtag : Get String := do
   let language ← language_tag_language
-  let script? : m _ := optional (attempt (skipChar '-' *> language_tag_script))
-  let region? : m _ := optional (attempt (skipChar '-' *> language_tag_region))
+  let script? : Get _ := optional (skipChar '-' *> language_tag_script)
+  let region? : Get _ := optional (skipChar '-' *> language_tag_region)
   let variants ← language_tag_variants
   let extensions ← language_tag_extensions
-  let privateuse? : m _ := optional (attempt (skipChar '-' *> language_tag_privateuse))
+  let privateuse? : Get _ := optional (skipChar '-' *> language_tag_privateuse)
   let mut out := language
   if let some s ← script? then out := out ++ "-" ++ s
   if let some r ← region? then out := out ++ "-" ++ r
@@ -109,32 +107,32 @@ def language_tag_grandfathered_regular : Array String :=
     "zh-hakka", "zh-min", "zh-min-nan", "zh-xiang"
   ]
 
-@[inline, specialize]
-def pstring_ci (s : String) : m String := do
+@[inline]
+def pstring_ci (s : String) : Get String := do
   for c in s.toList do
     let _ ← satisfy fun x => x.toLower == c.toLower
   return s
 
-@[inline, specialize]
-def language_tag_parse_list (xs : Array String) : m String := do
+@[inline]
+def language_tag_parse_list (xs : Array String) : Get String := do
   let mut acc : Option String := none
   for tag in xs do
     match acc with
     | some _ => pure ()
     | none =>
-      if let some res ← optional (attempt (pstring_ci tag)) then
+      if let some res ← optional (pstring_ci tag) then
         acc := some res
   match acc with
   | some res => pure res
   | none => fail "invalid grandfathered tag"
 
-@[inline, specialize]
-def language_tag_grandfathered : m String :=
-  (attempt (language_tag_parse_list language_tag_grandfathered_irregular))
+@[inline]
+def language_tag_grandfathered : Get String :=
+  (language_tag_parse_list language_tag_grandfathered_irregular)
   <|> (language_tag_parse_list language_tag_grandfathered_regular)
 
-@[always_inline, specialize]
-def language_tag : m String :=
-  (attempt language_tag_langtag) <|> (attempt language_tag_privateuse) <|> language_tag_grandfathered
+@[always_inline]
+def language_tag : Get String :=
+  (language_tag_langtag) <|> (language_tag_privateuse) <|> language_tag_grandfathered
 
 end Http.Parser

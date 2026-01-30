@@ -13,21 +13,21 @@ def paddedFlag : UInt8 := 0x08
 def priorityFlag : UInt8 := 0x20
 def ackFlag : UInt8 := 0x01
 
-@[inline]
+@[always_inline]
 def getUInt24BE : Get Nat := do
   let b1 ← getThe UInt8
   let b2 ← getThe UInt8
   let b3 ← getThe UInt8
   return (b1.toNat <<< 16) + (b2.toNat <<< 8) + b3.toNat
 
-@[inline]
+@[always_inline]
 def getUInt16BE : Get UInt16 := do
   let b1 ← getThe UInt8
   let b2 ← getThe UInt8
   let n := (b1.toNat <<< 8) + b2.toNat
   return UInt16.ofNat n
 
-@[inline]
+@[always_inline]
 def getUInt32BE : Get UInt32 := do
   let b1 ← getThe UInt8
   let b2 ← getThe UInt8
@@ -40,7 +40,7 @@ def getUInt32BE : Get UInt32 := do
     UInt32.ofNat b4.toNat
   return n
 
-@[inline]
+@[always_inline]
 def getStreamId : Get StreamId := do
   let word ← getUInt32BE
   let masked := word &&& (0x7fffffff : UInt32)
@@ -76,13 +76,13 @@ def takePaddedData : Option UInt8 → Get ByteArray := fun padLen? => do
   match padLen? with
   | none => get_bytes rem
   | some p =>
-      let pad := p.toNat
-      if pad > rem then
-        throw (.userError s!"padding {pad} exceeds remaining {rem}")
-      let dataLen := rem - pad
-      let data ← get_bytes dataLen
-      _ ← get_bytes pad
-      return data
+    let pad := p.toNat
+    if pad > rem then
+      throw (.userError s!"padding {pad} exceeds remaining {rem}")
+    let dataLen := rem - pad
+    let data ← get_bytes dataLen
+    _ ← get_bytes pad
+    return data
 
 def decodeDataFrame (flags : UInt8) : Get FramePayload := do
   let padLen? ← if (flags &&& paddedFlag) != 0 then some <$> getThe UInt8 else pure none
