@@ -255,7 +255,7 @@ def frameLength (header : ByteArray) : Option Nat := do
 
 def recvExact (conn : Transport.Connection) (n : UInt64) : ExceptT String Async ByteArray := do
   let size ← ByteArray.size <$> conn.readBuffer.get
-  if n.toNat ≤ size then
+  if size < n.toNat then
     conn.readToBuffer n
   let t ← unsafe conn.readBuffer.take
   let head := t.extract 0 n.toNat
