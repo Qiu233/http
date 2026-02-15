@@ -164,11 +164,18 @@ private def readToEnd (conn : Transport.Connection) (errMsg : String) : ExceptT 
 open Binary in
 /--
 Return `Option.none` in two cases:
+* `Transfer-Encoding` has no `chunked` and no bytes remain to read
 * `Content-Length` is `0`
-* `Content-Length` is absent and `Transfer-Encoding` has no `chunked`
 -/
 def recvHttp1Body? (conn : Transport.Connection) (header : Http1_1.HttpMessageHeader)
     : ExceptT String Async (Option Http1_1.HttpMessageBody) := do
+  let is_chunked ← match header.is_chunked with
+    | .error e => throw s!"failed to decode transfer-encoding: {e}"
+    | .ok r => pure r
+  if is_chunked then
+    let cbody ← bufferedGet conn Http1_1.Parser.chunked_body "failed to parse HTTP/1.1 body"
+    pure (some (Http1_1.HttpMessageBody.chunked cbody))
+  else
   let content_length? ← match header.content_length? with
     | .error e => throw s!"failed to decode content-length: {e}"
     | .ok r => pure r
@@ -179,48 +186,52 @@ def recvHttp1Body? (conn : Transport.Connection) (header : Http1_1.HttpMessageHe
     else
       (some ∘ Http1_1.HttpMessageBody.bytes) <$> bufferedGet conn (get_bytes len) "failed to parse HTTP/1.1 body"
   | none =>
-    let is_chunked ← match header.is_chunked with
-      | .error e => throw s!"failed to decode transfer-encoding: {e}"
-      | .ok r => pure r
-    if is_chunked then
-      let cbody ← bufferedGet conn Http1_1.Parser.chunked_body "failed to parse HTTP/1.1 body"
-      pure (some (Http1_1.HttpMessageBody.chunked cbody))
+    -- important note: it must holds that `pending exhaust ≡ exhaust` in behavior
+    let rem ← readToEnd conn "failed to fetch HTTP/1.1 body"
+    if rem.size == 0 then
+      pure none
     else
-      -- important note: it must holds that `pending exhaust ≡ exhaust` in behavior
-      let rem ← readToEnd conn "failed to fetch HTTP/1.1 body"
-      if rem.size == 0 then
-        pure none
-      else
-        pure (some (Http1_1.HttpMessageBody.bytes rem))
+      pure (some (Http1_1.HttpMessageBody.bytes rem))
 
 
-/-!
-## Client side receiving
-* If `Content-Length` is present, read as much as it specifies.
-* Else if status/method implies no body (HEAD, 1xx, 204, 304) → body = empty, stop at end of headers.
+/-
+## Client side response receiving
+* If status is 101, throw error.
+* Else if status/method implies no body (HEAD, 1xx but not 101, 204, 304) → body = empty, stop at end of headers.
 * Else if Transfer-Encoding: chunked → chunk decode until terminator, then optional trailers.
-* Else if Transfer-Encoding exists but not properly chunk-framed → read until connection close.
+* Else if Transfer-Encoding exists but has no `chunked` → read until connection close.
+* Else if `Content-Length` is present, read as much as it specifies.
 * Else (no TE, no CL) → read until connection close.
 -/
 
 open Binary in
-def recvHttp1 (conn : Transport.Connection) (req_head : Bool) : ExceptT String Async Response := do
+/--
+This function should only be used for receiving **ordinary** messages.
+An error is thrown on 101. All other 1xx messages are ignored.
+-/
+partial def recvHttp1Final (conn : Transport.Connection) (req_head : Bool) : ExceptT String Async Response := do
   let header ← bufferedGet conn Http1_1.Parser.http_message_header "failed to parse HTTP/1.1 header"
-  if req_head then
-    return ← responseFromHttp1 { header, body? := none }
   let Http1_1.StartLine.status statusLine := header.start_line
     | throw "internal error: start line of HTTP/1.1 response is not a status line"
   let status := ToString.toString statusLine.status_code
+  if status == "101" then
+    throw s!"{decl_name%}: 101 Switching Protocols is not supported in proper responses"
   if let ['1', _, _] := status.toList then -- 1xx (informational) should have no body
-    return ← responseFromHttp1 { header, body? := none }
-  if status matches "204" | "304" then -- `204 No Content`, `304 Not Modified`
-    return ← responseFromHttp1 { header, body? := none }
-  let body? ← recvHttp1Body? conn header
-  if status == "205" then -- `205 Reset Content`
-    if let some (.chunked chunked) := body? then
-      if chunked.chunks.size > 0 then
-        throw "HTTP/1.1 response 205 unexpectedly contains body bytes"
-  responseFromHttp1 { header, body? }
+    recvHttp1Final conn req_head -- skip, should be tail recursive
+  else
+    if status matches "204" | "304" then -- `204 No Content`, `304 Not Modified`
+      return ← responseFromHttp1 { header, body? := none }
+    if req_head then
+      return ← responseFromHttp1 { header, body? := none }
+    let body? ← recvHttp1Body? conn header
+    if status == "205" then -- `205 Reset Content`
+      if let some (.chunked chunked) := body? then
+        if chunked.chunks.size > 0 then
+          throw "HTTP/1.1 response 205 unexpectedly contains body bytes"
+      else if let some (.bytes bs) := body? then
+        if bs.size > 0 then
+          throw "HTTP/1.1 response 205 unexpectedly contains body bytes"
+    responseFromHttp1 { header, body? }
 
 def sendHttp1 (client : HttpClient) (req : Request) : ExceptT String Async Response := do
   let addr ← resolveAddress client.host client.port
@@ -228,7 +239,7 @@ def sendHttp1 (client : HttpClient) (req : Request) : ExceptT String Async Respo
   try
     let req := prepareRequest client req
     conn.send (requestToHttp1Bytes req)
-    recvHttp1 conn (req.method == "HEAD")
+    recvHttp1Final conn (req.method == "HEAD")
   finally
     conn.shutdown
 
@@ -276,6 +287,15 @@ def recvFrame (conn : Transport.Connection) : ExceptT String Async Http.Http2.Fr
 def h2EndStreamFlag : UInt8 := 0x01
 def h2EndHeadersFlag : UInt8 := 0x04
 
+def sendWindowUpdate (conn : Transport.Connection) (streamId increment : Nat) : ExceptT String Async Unit := do
+  -- WINDOW_UPDATE with increment 0 is a protocol error; skip noop updates.
+  if increment == 0 then
+    return ()
+  let frame : Http.Http2.Frame :=
+    { header := { length := 4, typ := .windowUpdate, flags := 0, streamId := streamId }
+      payload := .windowUpdate { windowSizeIncrement := increment } }
+  conn.send (Http.Http2.Builder.frameBytes frame)
+
 def statusFromHeaders [Monad m] [MonadExceptOf String m] (headers : List Http.HPack.HeaderField) : m Nat := do
   let h ← headers.find? (fun h => h.name == ":status".toUTF8) |>.getDM (throw "missing :status pseudo-header")
   let some s := String.fromUTF8? h.value | throw "invalid :status value"
@@ -300,14 +320,18 @@ def readHttp2Response (conn : Transport.Connection) (streamId : Http.Http2.Strea
   let mut done := false
   while !done do
     let frame ← recvFrame conn
-    match frame.payload with
-    | .settings f =>
+    if let Http2.FramePayload.settings f := frame.payload then
       if !f.ack then
         let ackFrame : Http.Http2.Frame :=
           { header := { length := 0, typ := .settings, flags := 0, streamId := 0 }
             payload := .settings { ack := true, settings := #[] } }
         conn.send (Http.Http2.Builder.frameBytes ackFrame)
-    | _ => pure ()
+    if frame.payload matches .data _ then
+      -- DATA consumes connection window for all streams.
+      sendWindowUpdate conn 0 frame.header.length
+      -- DATA on our response stream also consumes that stream's window.
+      if frame.header.streamId == streamId then
+        sendWindowUpdate conn streamId frame.header.length
     if frame.header.streamId != streamId then
       continue
     match frame.payload with
