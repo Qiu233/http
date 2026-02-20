@@ -58,6 +58,7 @@ public structure HttpClient where
   public mk' ::
   host : String
   port : UInt16 := 80
+  scheme : String := "http"
   protocol : Http.Connection.Protocol := .http1_1
   defaultHeaders : Headers := #[]
   transport : Transport := Transport.tcp
@@ -65,8 +66,8 @@ deriving Repr
 
 @[always_inline]
 public def HttpClient.mkTCP (host : String) (port : UInt16 := 80)
-    (protocol : Http.Connection.Protocol := .http1_1) : HttpClient :=
-  { host, port, protocol, transport := Transport.tcp }
+    (protocol : Http.Connection.Protocol := .http1_1) (scheme : String := "http") : HttpClient :=
+  { host, port, scheme, protocol, transport := Transport.tcp }
 
 @[always_inline]
 def header (name value : String) : Header :=
@@ -265,8 +266,7 @@ def frameLength (header : ByteArray) : Option Nat := do
   return (b0.toNat <<< 16) + (b1.toNat <<< 8) + b2.toNat
 
 def recvExact (conn : Transport.Connection) (n : UInt64) : ExceptT String Async ByteArray := do
-  let size ← ByteArray.size <$> conn.readBuffer.get
-  if size < n.toNat then
+  while (← ByteArray.size <$> conn.readBuffer.get) < n.toNat do
     conn.readToBuffer n
   let t ← unsafe conn.readBuffer.take
   let head := t.extract 0 n.toNat
@@ -276,6 +276,13 @@ def recvExact (conn : Transport.Connection) (n : UInt64) : ExceptT String Async 
 
 def recvFrame (conn : Transport.Connection) : ExceptT String Async Http.Http2.Frame := do
   let header ← recvExact conn 9
+  if header.size >= 9 &&
+      header.get! 0 == 0x48 && -- H
+      header.get! 1 == 0x54 && -- T
+      header.get! 2 == 0x54 && -- T
+      header.get! 3 == 0x50 && -- P
+      header.get! 4 == 0x2f then -- /
+    throw "peer replied with HTTP/1.x while HTTP/2 was expected; ensure TLS ALPN negotiated \"h2\""
   let some len := frameLength header | throw "failed to decode frame length"
   assert! (len < (2 ^ 64 - 1 : Nat))
   let payload ← recvExact conn (UInt64.ofNat len)
@@ -376,7 +383,7 @@ def sendHttp2 (client : HttpClient) (req : Request) : ExceptT String Async Respo
     let req := prepareRequestH2 client req
     let ctx : RequestH2Context :=
       { streamId := 1
-        scheme? := some "http"
+        scheme? := some client.scheme
         authority? := some (hostHeaderValue client.host client.port) }
     for frame in requestToHttp2Frames req ctx do
       conn.send (Http.Http2.Builder.frameBytes frame)
