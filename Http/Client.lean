@@ -240,15 +240,19 @@ partial def recvHttp1Final (conn : Transport.Connection) (req_head : Bool) : Exc
           throw "HTTP/1.1 response 205 unexpectedly contains body bytes"
     responseFromHttp1 { header, body? }
 
-def sendHttp1 (client : HttpClient) (req : Request) : ExceptT String Async Response := do
-  let addr ← resolveAddress client.host client.port
-  let conn ← client.transport.connect addr
+def sendHttp1WithConn (client : HttpClient) (req : Request) (conn : Transport.Connection) :
+    ExceptT String Async Response := do
   try
     let req := prepareRequest client req
     conn.send (requestToHttp1Bytes req)
     recvHttp1Final conn (req.method == "HEAD")
   finally
     conn.shutdown
+
+def sendHttp1 (client : HttpClient) (req : Request) : ExceptT String Async Response := do
+  let addr ← resolveAddress client.host client.port
+  let conn ← client.transport.connect addr
+  sendHttp1WithConn client req conn
 
 def prepareRequestH2 (client : HttpClient) (req : Request) : Request :=
   let headers := applyDefaultHeaders req.headers client.defaultHeaders
@@ -377,9 +381,8 @@ def readHttp2Response (conn : Transport.Connection) (streamId : Http.Http2.Strea
   | _, _ =>
     throw "missing response headers"
 
-def sendHttp2 (client : HttpClient) (req : Request) : ExceptT String Async Response := do
-  let addr ← resolveAddress client.host client.port
-  let conn ← client.transport.connect addr
+def sendHttp2WithConn (client : HttpClient) (req : Request) (conn : Transport.Connection) :
+    ExceptT String Async Response := do
   try
     conn.send Http.Http2.connectionPreface
     let settingsFrame : Http.Http2.Frame :=
@@ -397,13 +400,24 @@ def sendHttp2 (client : HttpClient) (req : Request) : ExceptT String Async Respo
   finally
     conn.shutdown
 
+def sendHttp2 (client : HttpClient) (req : Request) : ExceptT String Async Response := do
+  let addr ← resolveAddress client.host client.port
+  let conn ← client.transport.connect addr
+  sendHttp2WithConn client req conn
+
 public def HttpClient.sendAsync (client : HttpClient) (req : Request) :
     Async (Except String Response) := do
+  let addr ← resolveAddress client.host client.port
+  let conn ← client.transport.connect addr
   match ← client.protocol.get with
-  | .http1_1 => sendHttp1 client req
-  | .http2 => sendHttp2 client req
-  | .unknown => return .error "unknown protocol"
-  | .unrecognized name => return .error s!"unrecognized protocol: {name}"
+  | .http1_1 => sendHttp1WithConn client req conn
+  | .http2 => sendHttp2WithConn client req conn
+  | .unknown =>
+    conn.shutdown
+    return .error "unknown protocol"
+  | .unrecognized name =>
+    conn.shutdown
+    return .error s!"unrecognized protocol: {name}"
 
 public def HttpClient.send (client : HttpClient) (req : Request) :
     IO (Except String Response) :=
