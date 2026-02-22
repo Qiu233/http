@@ -1,7 +1,7 @@
 module
 
 public import Http.Surface
-public import Http.Connection
+-- public import Http.Connection
 public import Binary -- TODO: why? Without this will causes downstream importers `invalid environment extension, 'Binary.Deriving.binEnumAttr' has already been used`
 import Http.Http1_1.Builder
 import Http.Http1_1.Parser
@@ -54,20 +54,26 @@ instance : Inhabited Transport where
 instance : Repr Transport where
   reprPrec _ _ := "<transport>"
 
+public inductive Protocol where
+  | http1_1
+  | http2
+  | unknown
+  | unrecognized (name : String)
+deriving Inhabited, Repr, BEq
+
 public structure HttpClient where
   public mk' ::
   host : String
   port : UInt16 := 80
   scheme : String := "http"
-  protocol : Http.Connection.Protocol := .http1_1
+  protocol : IO.Ref Http.Protocol
   defaultHeaders : Headers := #[]
   transport : Transport := Transport.tcp
-deriving Repr
 
 @[always_inline]
 public def HttpClient.mkTCP (host : String) (port : UInt16 := 80)
-    (protocol : Http.Connection.Protocol := .http1_1) (scheme : String := "http") : HttpClient :=
-  { host, port, scheme, protocol, transport := Transport.tcp }
+    (protocol : Http.Protocol := .http1_1) (scheme : String := "http") : BaseIO HttpClient := do
+  return { host, port, scheme, protocol := ← IO.mkRef protocol, transport := Transport.tcp }
 
 @[always_inline]
 def header (name value : String) : Header :=
@@ -392,11 +398,12 @@ def sendHttp2 (client : HttpClient) (req : Request) : ExceptT String Async Respo
     conn.shutdown
 
 public def HttpClient.sendAsync (client : HttpClient) (req : Request) :
-    Async (Except String Response) :=
-  match client.protocol with
+    Async (Except String Response) := do
+  match ← client.protocol.get with
   | .http1_1 => sendHttp1 client req
   | .http2 => sendHttp2 client req
   | .unknown => return .error "unknown protocol"
+  | .unrecognized name => return .error s!"unrecognized protocol: {name}"
 
 public def HttpClient.send (client : HttpClient) (req : Request) :
     IO (Except String Response) :=
